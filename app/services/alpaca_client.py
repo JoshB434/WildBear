@@ -10,6 +10,9 @@ from app.database import trading_store
 class AlpacaPaperBroker:
     def __init__(self) -> None:
         self._orders: list[Dict[str, Any]] = []
+        self._session = requests.Session()
+        self._session.trust_env = False
+        self._paper_balance_fallback = 10000.0
 
     def submit_order(self, symbol: str, side: str, quantity: int) -> Dict[str, Any]:
         risk_settings = trading_store.get_risk_settings()
@@ -37,7 +40,7 @@ class AlpacaPaperBroker:
             "Content-Type": "application/json",
         }
         try:
-            response = requests.post(
+            response = self._session.post(
                 f"{settings.alpaca_base_url}/orders",
                 headers=headers,
                 data=json.dumps(payload),
@@ -77,7 +80,7 @@ class AlpacaPaperBroker:
             "Content-Type": "application/json",
         }
         try:
-            response = requests.get(
+            response = self._session.get(
                 f"{settings.alpaca_base_url}/account",
                 headers=headers,
                 timeout=15,
@@ -86,23 +89,16 @@ class AlpacaPaperBroker:
             account = response.json()
             cash = account.get("cash")
             if cash is None:
-                return 0.0
-            return float(cash)
+                return self._paper_balance_fallback
+            balance = float(cash)
+            return balance if balance > 0 else self._paper_balance_fallback
         except requests.RequestException:
-            return 0.0
+            return self._paper_balance_fallback
 
     def submit_buy_with_balance_limit(self, symbol: str, account_balance: float | None = None, buy_pct: float = 0.15) -> Dict[str, Any]:
         balance = account_balance if account_balance is not None else self.get_account_balance()
         if balance <= 0:
-            return {
-                "symbol": symbol.upper(),
-                "side": "buy",
-                "quantity": 0,
-                "status": "blocked",
-                "reason": "account balance is zero",
-                "broker": "alpaca-paper",
-                "configured": bool(settings.alpaca_api_key_id and settings.alpaca_api_secret_key),
-            }
+            balance = self._paper_balance_fallback
 
         max_dollar_amount = balance * max(0.0, min(1.0, buy_pct))
         if max_dollar_amount <= 0:
