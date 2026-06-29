@@ -5,6 +5,7 @@ from app.database import trading_store
 from app.schemas import OrderCreate, RiskSettings
 from app.services.ai_analysis import aitrading_analysis_service
 from app.services.alpaca_client import alpaca_paper_broker
+from app.services.market_data import alpaca_market_data_service
 from app.services.tradingview_alerts import tradingview_alert_service
 
 router = APIRouter()
@@ -29,6 +30,9 @@ def tradingview_webhook(payload: dict, x_webhook_secret: str | None = Header(def
     price = payload.get("price")
     strategy = payload.get("strategy")
 
+    market_data = alpaca_market_data_service.get_stock_snapshot(ticker, timeframe="1Day", limit=5)
+    market_summary = alpaca_market_data_service.build_analysis_summary(market_data)
+
     alert = tradingview_alert_service.receive_alert(
         ticker=ticker,
         action=action,
@@ -38,7 +42,8 @@ def tradingview_webhook(payload: dict, x_webhook_secret: str | None = Header(def
     analysis = aitrading_analysis_service.analyze(
         symbol=ticker,
         timeframe="1D",
-        notes=f"{action} alert from TradingView via webhook; strategy={strategy or 'n/a'}",
+        notes=f"{action} alert from TradingView via webhook; strategy={strategy or 'n/a'}; {market_summary}",
+        market_data=market_data,
     )
 
     order_payload = None
@@ -61,6 +66,7 @@ def tradingview_webhook(payload: dict, x_webhook_secret: str | None = Header(def
         "received": True,
         "payload": payload,
         "alert": alert,
+        "market_data": market_data,
         "analysis": analysis,
         "order": order_payload,
     }

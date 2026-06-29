@@ -1,6 +1,8 @@
 from fastapi.testclient import TestClient
+import pytest
 
 from main import app
+from app.api.v1.routes import integration as integration_module
 
 client = TestClient(app)
 
@@ -130,3 +132,50 @@ def test_tradingview_webhook_and_risk_limits():
         json={"symbol": "MSFT", "side": "buy", "quantity": 100},
     )
     assert blocked_order_response.status_code == 409
+
+
+def test_tradingview_webhook_includes_live_market_data_in_analysis(monkeypatch):
+    market_snapshot = {
+        "symbol": "QQQ",
+        "timeframe": "1Day",
+        "available": True,
+        "bars": [
+            {"time": "2026-06-28T14:30:00Z", "open": 480.0, "high": 482.0, "low": 479.2, "close": 481.6, "volume": 1200000},
+            {"time": "2026-06-28T14:35:00Z", "open": 481.6, "high": 483.1, "low": 480.8, "close": 482.4, "volume": 1100000},
+        ],
+        "latest_bar": {"time": "2026-06-28T14:35:00Z", "open": 481.6, "high": 483.1, "low": 480.8, "close": 482.4, "volume": 1100000},
+        "previous_close": 481.6,
+        "change_pct": 0.166,
+        "average_volume": 1150000.0,
+    }
+    captured = {}
+
+    monkeypatch.setattr(
+        integration_module.alpaca_market_data_service,
+        "get_stock_snapshot",
+        lambda symbol, timeframe="1Day", limit=5: market_snapshot,
+    )
+
+    def fake_analyze(symbol, timeframe, notes=None, market_data=None):
+        captured["market_data"] = market_data
+        return {
+            "symbol": symbol,
+            "timeframe": timeframe,
+            "notes": notes or "",
+            "signal": "hold",
+            "confidence": 0.68,
+            "model": "test-double",
+        }
+
+    monkeypatch.setattr(integration_module.aitrading_analysis_service, "analyze", fake_analyze)
+
+    webhook_response = client.post(
+        "/api/v1/integration/tradingview/webhook",
+        headers={"x-webhook-secret": "test-secret"},
+        json={"ticker": "QQQ", "action": "buy", "price": 482.4, "strategy": "supertrend"},
+    )
+
+    assert webhook_response.status_code == 200
+    payload = webhook_response.json()
+    assert payload["market_data"]["symbol"] == "QQQ"
+    assert captured["market_data"]["symbol"] == "QQQ"
