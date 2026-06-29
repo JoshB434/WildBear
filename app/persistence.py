@@ -36,12 +36,29 @@ def save_state() -> None:
 def load_state() -> None:
     if not DATA_FILE.exists():
         return
-    payload = json.loads(DATA_FILE.read_text(encoding="utf-8"))
+
+    try:
+        payload = json.loads(DATA_FILE.read_text(encoding="utf-8"))
+    except (json.JSONDecodeError, OSError):
+        return
+
     for item in payload.get("signals", []):
-        trading_store.create_signal(type("SignalCreate", (), item)())
+        try:
+            trading_store.create_signal(type("SignalCreate", (), item)())
+        except Exception:
+            continue
     for item in payload.get("alerts", []):
-        trading_store.create_alert(type("AlertCreate", (), item)())
+        try:
+            trading_store.create_alert(type("AlertCreate", (), item)())
+        except Exception:
+            continue
     for item in payload.get("orders", []):
-        trading_store.create_order(type("OrderCreate", (), item)())
+        try:
+            trading_store.create_order(type("OrderCreate", (), item)())
+        except Exception:
+            continue
     if payload.get("risk_settings"):
-        trading_store.save_risk_settings(type("RiskSettings", (), payload["risk_settings"])())
+        try:
+            trading_store.save_risk_settings(type("RiskSettings", (), payload["risk_settings"])())
+        except Exception:
+            pass
