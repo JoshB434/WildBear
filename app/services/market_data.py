@@ -13,6 +13,27 @@ class AlpacaMarketDataService:
 
     def get_stock_snapshot(self, symbol: str, timeframe: str = "1Day", limit: int = 5) -> Dict[str, Any]:
         symbol = symbol.upper().strip()
+        
+        # Route to primary source first, with fallback
+        primary_source = settings.market_data_primary_source
+        
+        if primary_source == "yahoo":
+            result = self._get_yahoo_snapshot(symbol, timeframe, limit)
+            if result.get("available"):
+                return {**result, "source": "yahoo"}
+            # Fall back to Alpaca if Yahoo fails
+            result = self._get_alpaca_snapshot(symbol, timeframe, limit)
+            return {**result, "source": "alpaca"}
+        else:
+            # Alpaca is primary, Yahoo is fallback
+            result = self._get_alpaca_snapshot(symbol, timeframe, limit)
+            if result.get("available"):
+                return {**result, "source": "alpaca"}
+            result = self._get_yahoo_snapshot(symbol, timeframe, limit)
+            return {**result, "source": "yahoo"}
+
+    def _get_alpaca_snapshot(self, symbol: str, timeframe: str = "1Day", limit: int = 5) -> Dict[str, Any]:
+        """Fetch market data from Alpaca API."""
         headers = {
             "APCA-API-KEY-ID": settings.alpaca_api_key_id or "",
             "APCA-API-SECRET-KEY": settings.alpaca_api_secret_key or "",
@@ -52,7 +73,7 @@ class AlpacaMarketDataService:
             current_close = float(latest_bar["close"])
             previous_close = float(previous_bar["close"]) if previous_bar else current_close
             change_pct = ((current_close - previous_close) / previous_close * 100.0) if previous_close else 0.0
-            average_volume = sum(float(bar.get("v", 0.0)) for bar in bars) / len(bars)
+            average_volume = sum(float(bar.get("volume", 0.0)) for bar in bars) / len(bars) if bars else 0.0
 
             return {
                 "symbol": symbol,
@@ -67,6 +88,82 @@ class AlpacaMarketDataService:
                 "average_volume": round(average_volume, 2),
             }
         except requests.RequestException as exc:
+            return {
+                "symbol": symbol,
+                "timeframe": timeframe,
+                "available": False,
+                "error": str(exc),
+                "bars": [],
+            }
+
+    def _get_yahoo_snapshot(self, symbol: str, timeframe: str = "1Day", limit: int = 5) -> Dict[str, Any]:
+        """Fetch market data from Yahoo Finance via yfinance API."""
+        try:
+            import yfinance as yf
+            
+            ticker = yf.Ticker(symbol)
+            
+            # Get historical data
+            hist = ticker.history(period="5d")
+            if hist.empty:
+                return {
+                    "symbol": symbol,
+                    "timeframe": timeframe,
+                    "available": False,
+                    "bars": [],
+                }
+            
+            # Convert to bar format (most recent last)
+            bars = []
+            for idx, row in hist.iterrows():
+                bars.append({
+                    "time": int(idx.timestamp()),
+                    "open": float(row["Open"]),
+                    "high": float(row["High"]),
+                    "low": float(row["Low"]),
+                    "close": float(row["Close"]),
+                    "volume": int(row["Volume"]),
+                })
+            
+            if not bars:
+                return {
+                    "symbol": symbol,
+                    "timeframe": timeframe,
+                    "available": False,
+                    "bars": [],
+                }
+            
+            latest_bar = bars[-1]
+            previous_bar = bars[-2] if len(bars) > 1 else bars[-1]
+            
+            current_close = float(latest_bar["close"])
+            previous_close = float(previous_bar["close"])
+            change_pct = ((current_close - previous_close) / previous_close * 100.0) if previous_close else 0.0
+            average_volume = sum(float(bar.get("volume", 0.0)) for bar in bars) / len(bars) if bars else 0.0
+            
+            # Get current quote
+            info = ticker.info or {}
+            current_price = info.get("currentPrice") or current_close
+            bid = info.get("bid")
+            ask = info.get("ask")
+            
+            return {
+                "symbol": symbol,
+                "timeframe": timeframe,
+                "available": True,
+                "bars": bars,
+                "latest_bar": latest_bar,
+                "latest_quote": {
+                    "bid": bid,
+                    "ask": ask,
+                    "midpoint": (bid + ask) / 2.0 if bid and ask else current_price,
+                },
+                "latest_price": float(current_price),
+                "previous_close": previous_close,
+                "change_pct": round(change_pct, 4),
+                "average_volume": round(average_volume, 2),
+            }
+        except Exception as exc:
             return {
                 "symbol": symbol,
                 "timeframe": timeframe,
@@ -105,12 +202,12 @@ class AlpacaMarketDataService:
 
     def _normalize_bar(self, bar: Dict[str, Any]) -> Dict[str, Any]:
         return {
-            "time": bar.get("t"),
-            "open": bar.get("o"),
-            "high": bar.get("h"),
-            "low": bar.get("l"),
-            "close": bar.get("c"),
-            "volume": bar.get("v"),
+            "time": bar.get("t") or bar.get("time"),
+            "open": bar.get("o") or bar.get("open"),
+            "high": bar.get("h") or bar.get("high"),
+            "low": bar.get("l") or bar.get("low"),
+            "close": bar.get("c") or bar.get("close"),
+            "volume": bar.get("v") or bar.get("volume"),
         }
 
     def _normalize_quote(self, payload: Dict[str, Any]) -> Dict[str, Any]:
