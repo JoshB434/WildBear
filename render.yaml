@@ -8,3 +8,11 @@ services:
     envVars:
       - key: PYTHON_VERSION
         value: 3.11.9
+      - key: MARKET_DATA_PRIMARY_SOURCE
+        value: yahoo
+      - key: RECONCILIATION_SYMBOLS
+        value: QQQ
+      - key: DEFAULT_CONFIDENCE_THRESHOLD
+        value: "0.7"
+      - key: REGIME_MIN_AVERAGE_VOLUME
+        value: "1000000"
