@@ -97,15 +97,20 @@ class AlpacaMarketDataService:
             }
 
     def _get_yahoo_snapshot(self, symbol: str, timeframe: str = "1Day", limit: int = 5) -> Dict[str, Any]:
-        """Fetch market data from Yahoo Finance via yfinance API."""
+        """Fetch market data from Yahoo Finance."""
         try:
-            import yfinance as yf
+            # Yahoo Finance endpoint via public API
+            url = f"https://query1.finance.yahoo.com/v8/finance/chart/{symbol}?interval=1d&range=5d"
+            response = self._session.get(url, timeout=15)
+            response.raise_for_status()
+            data = response.json()
             
-            ticker = yf.Ticker(symbol)
+            # Extract chart data
+            result = data.get("chart", {}).get("result", [{}])[0]
+            timestamps = result.get("timestamp", [])
+            quotes = result.get("indicators", {}).get("quote", [{}])[0]
             
-            # Get historical data
-            hist = ticker.history(period="5d")
-            if hist.empty:
+            if not timestamps or not quotes:
                 return {
                     "symbol": symbol,
                     "timeframe": timeframe,
@@ -113,17 +118,20 @@ class AlpacaMarketDataService:
                     "bars": [],
                 }
             
-            # Convert to bar format (most recent last)
+            # Build bars
             bars = []
-            for idx, row in hist.iterrows():
-                bars.append({
-                    "time": int(idx.timestamp()),
-                    "open": float(row["Open"]),
-                    "high": float(row["High"]),
-                    "low": float(row["Low"]),
-                    "close": float(row["Close"]),
-                    "volume": int(row["Volume"]),
-                })
+            for i, ts in enumerate(timestamps):
+                bar = {
+                    "time": ts,
+                    "open": quotes.get("open", [None])[i],
+                    "high": quotes.get("high", [None])[i],
+                    "low": quotes.get("low", [None])[i],
+                    "close": quotes.get("close", [None])[i],
+                    "volume": quotes.get("volume", [None])[i],
+                }
+                # Only include bars with valid data
+                if all(bar[k] is not None for k in ["open", "high", "low", "close", "volume"]):
+                    bars.append(bar)
             
             if not bars:
                 return {
@@ -139,13 +147,7 @@ class AlpacaMarketDataService:
             current_close = float(latest_bar["close"])
             previous_close = float(previous_bar["close"])
             change_pct = ((current_close - previous_close) / previous_close * 100.0) if previous_close else 0.0
-            average_volume = sum(float(bar.get("volume", 0.0)) for bar in bars) / len(bars) if bars else 0.0
-            
-            # Get current quote
-            info = ticker.info or {}
-            current_price = info.get("currentPrice") or current_close
-            bid = info.get("bid")
-            ask = info.get("ask")
+            average_volume = sum(float(bar.get("volume", 0)) for bar in bars) / len(bars) if bars else 0.0
             
             return {
                 "symbol": symbol,
@@ -154,11 +156,11 @@ class AlpacaMarketDataService:
                 "bars": bars,
                 "latest_bar": latest_bar,
                 "latest_quote": {
-                    "bid": bid,
-                    "ask": ask,
-                    "midpoint": (bid + ask) / 2.0 if bid and ask else current_price,
+                    "bid": None,
+                    "ask": None,
+                    "midpoint": current_close,
                 },
-                "latest_price": float(current_price),
+                "latest_price": current_close,
                 "previous_close": previous_close,
                 "change_pct": round(change_pct, 4),
                 "average_volume": round(average_volume, 2),
