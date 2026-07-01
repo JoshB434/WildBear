@@ -47,12 +47,13 @@ def tradingview_webhook(payload: dict, x_webhook_secret: str | None = Header(def
     )
 
     order_payload = None
+    confidence_threshold = float(analysis.get("calibrated_threshold", 0.7))
     if (
         ticker
         and action in {"buy", "sell"}
         and analysis.get("signal") in {"buy", "sell"}
         and analysis["signal"] == action
-        and float(analysis.get("confidence", 0.0)) >= 0.8
+        and float(analysis.get("confidence", 0.0)) >= confidence_threshold
     ):
         side = analysis["signal"]
         order = trading_store.create_order(OrderCreate(symbol=ticker, side=side, quantity=1))
