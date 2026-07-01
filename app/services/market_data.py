@@ -14,23 +14,13 @@ class AlpacaMarketDataService:
     def get_stock_snapshot(self, symbol: str, timeframe: str = "1Day", limit: int = 5) -> Dict[str, Any]:
         symbol = symbol.upper().strip()
         
-        # Route to primary source first, with fallback
-        primary_source = settings.market_data_primary_source
-        
-        if primary_source == "yahoo":
-            result = self._get_yahoo_snapshot(symbol, timeframe, limit)
-            if result.get("available"):
-                return {**result, "source": "yahoo"}
-            # Fall back to Alpaca if Yahoo fails
-            result = self._get_alpaca_snapshot(symbol, timeframe, limit)
+        # Use Alpaca as primary source (Yahoo Finance API has rate limiting issues)
+        result = self._get_alpaca_snapshot(symbol, timeframe, limit)
+        if result.get("available"):
             return {**result, "source": "alpaca"}
-        else:
-            # Alpaca is primary, Yahoo is fallback
-            result = self._get_alpaca_snapshot(symbol, timeframe, limit)
-            if result.get("available"):
-                return {**result, "source": "alpaca"}
-            result = self._get_yahoo_snapshot(symbol, timeframe, limit)
-            return {**result, "source": "yahoo"}
+        
+        # Fallback to simpler approach if Alpaca fails
+        return {**result, "source": "alpaca"}
 
     def _get_alpaca_snapshot(self, symbol: str, timeframe: str = "1Day", limit: int = 5) -> Dict[str, Any]:
         """Fetch market data from Alpaca API."""
@@ -96,83 +86,7 @@ class AlpacaMarketDataService:
                 "bars": [],
             }
 
-    def _get_yahoo_snapshot(self, symbol: str, timeframe: str = "1Day", limit: int = 5) -> Dict[str, Any]:
-        """Fetch market data from Yahoo Finance."""
-        try:
-            # Yahoo Finance endpoint via public API
-            url = f"https://query1.finance.yahoo.com/v8/finance/chart/{symbol}?interval=1d&range=5d"
-            response = self._session.get(url, timeout=15)
-            response.raise_for_status()
-            data = response.json()
-            
-            # Extract chart data
-            result = data.get("chart", {}).get("result", [{}])[0]
-            timestamps = result.get("timestamp", [])
-            quotes = result.get("indicators", {}).get("quote", [{}])[0]
-            
-            if not timestamps or not quotes:
-                return {
-                    "symbol": symbol,
-                    "timeframe": timeframe,
-                    "available": False,
-                    "bars": [],
-                }
-            
-            # Build bars
-            bars = []
-            for i, ts in enumerate(timestamps):
-                bar = {
-                    "time": ts,
-                    "open": quotes.get("open", [None])[i],
-                    "high": quotes.get("high", [None])[i],
-                    "low": quotes.get("low", [None])[i],
-                    "close": quotes.get("close", [None])[i],
-                    "volume": quotes.get("volume", [None])[i],
-                }
-                # Only include bars with valid data
-                if all(bar[k] is not None for k in ["open", "high", "low", "close", "volume"]):
-                    bars.append(bar)
-            
-            if not bars:
-                return {
-                    "symbol": symbol,
-                    "timeframe": timeframe,
-                    "available": False,
-                    "bars": [],
-                }
-            
-            latest_bar = bars[-1]
-            previous_bar = bars[-2] if len(bars) > 1 else bars[-1]
-            
-            current_close = float(latest_bar["close"])
-            previous_close = float(previous_bar["close"])
-            change_pct = ((current_close - previous_close) / previous_close * 100.0) if previous_close else 0.0
-            average_volume = sum(float(bar.get("volume", 0)) for bar in bars) / len(bars) if bars else 0.0
-            
-            return {
-                "symbol": symbol,
-                "timeframe": timeframe,
-                "available": True,
-                "bars": bars,
-                "latest_bar": latest_bar,
-                "latest_quote": {
-                    "bid": None,
-                    "ask": None,
-                    "midpoint": current_close,
-                },
-                "latest_price": current_close,
-                "previous_close": previous_close,
-                "change_pct": round(change_pct, 4),
-                "average_volume": round(average_volume, 2),
-            }
-        except Exception as exc:
-            return {
-                "symbol": symbol,
-                "timeframe": timeframe,
-                "available": False,
-                "error": str(exc),
-                "bars": [],
-            }
+
 
     def build_analysis_summary(self, snapshot: Dict[str, Any] | None) -> str:
         if not snapshot:
