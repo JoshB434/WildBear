@@ -1,5 +1,7 @@
 import asyncio
 from contextlib import asynccontextmanager
+from datetime import datetime
+from zoneinfo import ZoneInfo
 
 from fastapi import FastAPI
 
@@ -8,15 +10,26 @@ from app.persistence import load_state
 
 
 async def keep_alive_ping() -> None:
-    """Background task to keep Render app from sleeping by pinging the health endpoint every 10 minutes."""
+    """Background task to keep Render app awake during market hours (8:30 AM - 4:30 PM CDT, Monday-Friday)."""
     while True:
-        await asyncio.sleep(600)  # 10 minutes
-        try:
-            import httpx
-            async with httpx.AsyncClient() as client:
-                await client.get("https://wildbear.onrender.com/", timeout=5)
-        except Exception:
-            pass  # Silently fail if pinging doesn't work
+        await asyncio.sleep(300)  # Check every 5 minutes
+        
+        # Check if we're within market hours (8:30 AM - 4:30 PM Central Time, Mon-Fri)
+        now_ct = datetime.now(ZoneInfo("America/Chicago"))
+        is_weekday = now_ct.weekday() < 5  # Monday=0 to Friday=4
+        is_market_hours = (
+            (now_ct.hour == 8 and now_ct.minute >= 30) or  # 8:30 AM or later
+            (now_ct.hour >= 9 and now_ct.hour < 16) or  # 9 AM - 3:59 PM
+            (now_ct.hour == 16 and now_ct.minute < 30)  # 4:00 PM - 4:29 PM
+        )
+        
+        if is_weekday and is_market_hours:
+            try:
+                import httpx
+                async with httpx.AsyncClient() as client:
+                    await client.get("https://wildbear.onrender.com/", timeout=5)
+            except Exception:
+                pass  # Silently fail if pinging doesn't work
 
 
 @asynccontextmanager
