@@ -1,11 +1,11 @@
 {
-  "run_at": "2026-07-02T19:20:49.426618+00:00",
+  "run_at": "2026-07-02T19:21:56.916601+00:00",
   "broker": {
     "configured": true,
     "mode": "paper",
     "position_fetch_error": null,
     "order_fetch_error": null,
-    "order_after": "2026-07-01T19:20:48.609437+00:00",
+    "order_after": "2026-07-01T19:21:56.459456+00:00",
     "order_status": "open"
   },
   "summary": {

@@ -23,13 +23,22 @@ def alpaca_status():
 
 @router.post("/tradingview/webhook")
 def tradingview_webhook(payload: dict, x_webhook_secret: str | None = Header(default=None)):
-    if settings.tradingview_webhook_secret and x_webhook_secret != settings.tradingview_webhook_secret:
-        raise HTTPException(status_code=401, detail="Invalid webhook secret")
-
+    # Validate webhook secret
+    webhook_secret = settings.tradingview_webhook_secret
+    if webhook_secret:
+        if not x_webhook_secret or x_webhook_secret != webhook_secret:
+            raise HTTPException(status_code=401, detail="Invalid webhook secret")
+    
+    # Validate required fields
     ticker = str(payload.get("ticker") or "").strip().upper()
     action = str(payload.get("action") or "hold").strip().lower()
     price = payload.get("price")
     strategy = payload.get("strategy")
+    
+    if not ticker:
+        raise HTTPException(status_code=400, detail="Missing required field: ticker")
+    if action not in {"buy", "sell", "hold"}:
+        raise HTTPException(status_code=400, detail="Invalid action. Must be: buy, sell, or hold")
 
     market_data = alpaca_market_data_service.get_stock_snapshot(ticker, timeframe="1Day", limit=5)
     market_summary = alpaca_market_data_service.build_analysis_summary(market_data)
@@ -57,11 +66,14 @@ def tradingview_webhook(payload: dict, x_webhook_secret: str | None = Header(def
         and float(analysis.get("confidence", 0.0)) >= confidence_threshold
     ):
         side = analysis["signal"]
-        order = trading_store.create_order(OrderCreate(symbol=ticker, side=side, quantity=1))
+        # Execute broker order first to get actual quantity
         if side == "buy":
             broker_order = alpaca_paper_broker.submit_buy_with_balance_limit(ticker, account_balance=None, buy_pct=0.15)
         else:
             broker_order = alpaca_paper_broker.submit_sell_all(ticker)
+        # Record order with actual quantity from broker
+        actual_quantity = broker_order.get("quantity", 1)
+        order = trading_store.create_order(OrderCreate(symbol=ticker, side=side, quantity=actual_quantity))
         order_payload = {"status": broker_order["status"], "broker": broker_order["broker"], "order": order.model_dump()}
         try:
             save_state()

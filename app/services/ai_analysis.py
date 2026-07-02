@@ -21,9 +21,9 @@ class AITradingAnalysisService:
         market_data_text = self._format_market_data(market_data)
         if self._client is not None:
             try:
-                response = self._client.responses.create(
-                    model=os.getenv("OPENAI_MODEL", "gpt-4.1-mini"),
-                    input=[
+                response = self._client.chat.completions.create(
+                    model=os.getenv("OPENAI_MODEL", "gpt-4-mini"),
+                    messages=[
                         {
                             "role": "system",
                             "content": "You are a cautious stock trading assistant. Use the live market snapshot and trading note together. Return JSON with symbol, signal (buy/sell/hold), confidence (0-1), and rationale. Only recommend a buy or sell when the evidence is strong.",
@@ -34,7 +34,7 @@ class AITradingAnalysisService:
                         },
                     ],
                 )
-                text = response.output_text.strip()
+                text = response.choices[0].message.content.strip()
                 if text.startswith("```"):
                     text = text.strip("`").strip()
                 parsed = self._parse_json_response(text)

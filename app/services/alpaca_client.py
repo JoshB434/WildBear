@@ -73,6 +73,25 @@ class AlpacaPaperBroker:
                 "error": str(exc),
             }
 
+    def get_position(self, symbol: str) -> float | None:
+        """Get current position size for a symbol."""
+        headers = {
+            "APCA-API-KEY-ID": settings.alpaca_api_key_id or "",
+            "APCA-API-SECRET-KEY": settings.alpaca_api_secret_key or "",
+            "Content-Type": "application/json",
+        }
+        try:
+            response = self._session.get(
+                f"{settings.alpaca_base_url}/positions/{symbol.upper()}",
+                headers=headers,
+                timeout=15,
+            )
+            response.raise_for_status()
+            position_data = response.json()
+            return float(position_data.get("qty", 0))
+        except requests.RequestException:
+            return None
+
     def get_account_balance(self) -> float:
         headers = {
             "APCA-API-KEY-ID": settings.alpaca_api_key_id or "",
@@ -122,7 +141,19 @@ class AlpacaPaperBroker:
         return self.submit_order(symbol, "buy", quantity)
 
     def submit_sell_all(self, symbol: str) -> Dict[str, Any]:
-        return self.submit_order(symbol, "sell", 999999)
+        """Sell entire position for a symbol. Fetches current position size from broker."""
+        position = self.get_position(symbol)
+        if position is None or position <= 0:
+            return {
+                "symbol": symbol.upper(),
+                "side": "sell",
+                "quantity": 0,
+                "status": "blocked",
+                "reason": "no position to sell",
+                "broker": "alpaca-paper",
+                "configured": bool(settings.alpaca_api_key_id and settings.alpaca_api_secret_key),
+            }
+        return self.submit_order(symbol, "sell", int(position))
 
 
 alpaca_paper_broker = AlpacaPaperBroker()
