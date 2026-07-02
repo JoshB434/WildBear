@@ -30,17 +30,31 @@ def list_markets():
 
 @router.get("/{symbol}")
 def get_market(symbol: str):
-    market_data = alpaca_market_data_service.get_stock_snapshot(symbol, timeframe="1Day", limit=5)
+    try:
+        market_data = alpaca_market_data_service.get_stock_snapshot(symbol, timeframe="1Day", limit=5)
+    except Exception as e:
+        return {
+            "symbol": symbol.upper(),
+            "error": str(e),
+            "regime": {"allowed": False, "reasons": ["data-fetch-error"]},
+        }
 
     # Regime filter check
-    average_volume = float(market_data.get("average_volume") or 0)
-    change_pct = float(market_data.get("change_pct") or 0)
+    try:
+        average_volume = float(market_data.get("average_volume") or 0)
+        change_pct = float(market_data.get("change_pct") or 0)
+    except (ValueError, TypeError):
+        average_volume = 0
+        change_pct = 0
+
     reasons = []
     if average_volume < settings.regime_min_average_volume:
         reasons.append("low-average-volume")
     if abs(change_pct) > settings.regime_max_abs_change_pct:
         reasons.append("excess-volatility")
-    regime_allowed = len(reasons) == 0 and market_data.get("available", False)
+    
+    is_available = market_data.get("available", False)
+    regime_allowed = len(reasons) == 0 and is_available
 
     return {
         "symbol": symbol.upper(),
@@ -51,6 +65,6 @@ def get_market(symbol: str):
             "reasons": reasons,
             "average_volume": average_volume,
             "change_pct": change_pct,
-            "source": market_data.get("source"),
+            "source": market_data.get("source", "unknown"),
         },
     }
