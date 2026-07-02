@@ -39,7 +39,7 @@ def get_market(symbol: str):
             "regime": {"allowed": False, "reasons": ["data-fetch-error"]},
         }
 
-    # Regime filter check
+    # Regime filter check with hardcoded thresholds to avoid settings import issues
     try:
         average_volume = float(market_data.get("average_volume") or 0)
         change_pct = float(market_data.get("change_pct") or 0)
@@ -47,10 +47,13 @@ def get_market(symbol: str):
         average_volume = 0
         change_pct = 0
 
+    REGIME_MIN_VOLUME = 1000000
+    REGIME_MAX_CHANGE = 10.0
+
     reasons = []
-    if average_volume < settings.regime_min_average_volume:
+    if average_volume < REGIME_MIN_VOLUME:
         reasons.append("low-average-volume")
-    if abs(change_pct) > settings.regime_max_abs_change_pct:
+    if abs(change_pct) > REGIME_MAX_CHANGE:
         reasons.append("excess-volatility")
     
     is_available = market_data.get("available", False)
