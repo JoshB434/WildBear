@@ -63,7 +63,8 @@ class AlpacaMarketDataService:
             current_close = float(latest_bar["close"])
             previous_close = float(previous_bar["close"]) if previous_bar else current_close
             change_pct = ((current_close - previous_close) / previous_close * 100.0) if previous_close else 0.0
-            average_volume = sum(float(bar.get("volume", 0.0)) for bar in bars) / len(bars) if bars else 0.0
+            # Raw Alpaca bars use 'v' for volume before normalization
+            average_volume = sum(float(bar.get("v", 0.0)) for bar in bars) / len(bars) if bars else 0.0
 
             return {
                 "symbol": symbol,
