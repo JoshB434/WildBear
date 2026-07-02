@@ -32,9 +32,9 @@ class AlpacaMarketDataService:
 
         try:
             bars_response = self._session.get(
-                f"{settings.alpaca_data_base_url}/stocks/bars/latest",
+                f"{settings.alpaca_data_base_url}/stocks/{symbol}/bars",
                 headers=headers,
-                params={"symbols": symbol},
+                params={"timeframe": "1Day", "limit": limit, "adjustment": "raw"},
                 timeout=15,
             )
             bars_response.raise_for_status()
