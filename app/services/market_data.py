@@ -5,6 +5,11 @@ import requests
 
 from app.config import settings
 
+_YAHOO_HEADERS = {
+    "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
+    "Accept": "application/json",
+}
+
 
 class AlpacaMarketDataService:
     def __init__(self) -> None:
@@ -14,13 +19,83 @@ class AlpacaMarketDataService:
     def get_stock_snapshot(self, symbol: str, timeframe: str = "1Day", limit: int = 5) -> Dict[str, Any]:
         symbol = symbol.upper().strip()
         
-        # Use Alpaca as primary source (Yahoo Finance API has rate limiting issues)
-        result = self._get_alpaca_snapshot(symbol, timeframe, limit)
+        # Try Yahoo Finance first (Alpaca paper API has restricted historical data access)
+        result = self._get_yahoo_snapshot(symbol, timeframe, limit)
         if result.get("available"):
-            return {**result, "source": "alpaca"}
+            return {**result, "source": "yahoo"}
         
-        # Fallback to simpler approach if Alpaca fails
+        # Fall back to Alpaca
+        result = self._get_alpaca_snapshot(symbol, timeframe, limit)
         return {**result, "source": "alpaca"}
+
+    def _get_yahoo_snapshot(self, symbol: str, timeframe: str = "1Day", limit: int = 5) -> Dict[str, Any]:
+        """Fetch market data from Yahoo Finance (no API key required)."""
+        try:
+            url = f"https://query2.finance.yahoo.com/v8/finance/chart/{symbol}?interval=1d&range=10d"
+            response = requests.get(url, headers=_YAHOO_HEADERS, timeout=15)
+            response.raise_for_status()
+            data = response.json()
+
+            result = data.get("chart", {}).get("result", [])
+            if not result:
+                return {"symbol": symbol, "timeframe": timeframe, "available": False, "bars": []}
+
+            chart = result[0]
+            timestamps = chart.get("timestamp", [])
+            quotes = chart.get("indicators", {}).get("quote", [{}])[0]
+            meta = chart.get("meta", {})
+
+            if not timestamps or not quotes:
+                return {"symbol": symbol, "timeframe": timeframe, "available": False, "bars": []}
+
+            # Build bars, keeping only complete bars (non-null close)
+            bars = []
+            closes = quotes.get("close", [])
+            for i, ts in enumerate(timestamps):
+                close_val = closes[i] if i < len(closes) else None
+                if close_val is None:
+                    continue
+                bars.append({
+                    "time": ts,
+                    "open": quotes.get("open", [None])[i],
+                    "high": quotes.get("high", [None])[i],
+                    "low": quotes.get("low", [None])[i],
+                    "close": close_val,
+                    "volume": quotes.get("volume", [None])[i] or 0,
+                })
+
+            if not bars:
+                return {"symbol": symbol, "timeframe": timeframe, "available": False, "bars": []}
+
+            latest_bar = bars[-1]
+            previous_bar = bars[-2] if len(bars) > 1 else bars[-1]
+            current_close = float(latest_bar["close"])
+            previous_close = float(previous_bar["close"])
+            change_pct = ((current_close - previous_close) / previous_close * 100.0) if previous_close else 0.0
+            # Use all historical bars for average volume (excludes today's partial bar)
+            historical_bars = bars[:-1] if len(bars) > 1 else bars
+            average_volume = sum(float(b.get("volume", 0)) for b in historical_bars) / len(historical_bars)
+
+            current_price = meta.get("regularMarketPrice") or current_close
+
+            return {
+                "symbol": symbol,
+                "timeframe": timeframe,
+                "available": True,
+                "bars": bars,
+                "latest_bar": latest_bar,
+                "latest_quote": {
+                    "bid": None,
+                    "ask": None,
+                    "midpoint": float(current_price),
+                },
+                "latest_price": float(current_price),
+                "previous_close": previous_close,
+                "change_pct": round(change_pct, 4),
+                "average_volume": round(average_volume, 2),
+            }
+        except Exception as exc:
+            return {"symbol": symbol, "timeframe": timeframe, "available": False, "error": str(exc), "bars": []}
 
     def _get_alpaca_snapshot(self, symbol: str, timeframe: str = "1Day", limit: int = 5) -> Dict[str, Any]:
         """Fetch market data from Alpaca API."""
