@@ -116,6 +116,9 @@ class AlpacaPaperBroker:
         risk_settings = trading_store.get_risk_settings()
         if risk_settings is not None:
             quantity = min(quantity, risk_settings.max_position_size)
+        else:
+            # Default risk limit if not configured
+            quantity = min(quantity, 5)
         return self.submit_order(symbol, "buy", quantity)
 
     def submit_sell_all(self, symbol: str) -> Dict[str, Any]:

@@ -2,6 +2,7 @@ from fastapi import APIRouter, Header, HTTPException
 
 from app.config import settings
 from app.database import trading_store
+from app.persistence import save_state
 from app.schemas import OrderCreate, RiskSettings
 from app.services.ai_analysis import aitrading_analysis_service
 from app.services.alpaca_client import alpaca_paper_broker
@@ -62,6 +63,7 @@ def tradingview_webhook(payload: dict, x_webhook_secret: str | None = Header(def
         else:
             broker_order = alpaca_paper_broker.submit_sell_all(ticker)
         order_payload = {"status": broker_order["status"], "broker": broker_order["broker"], "order": order.model_dump()}
+        save_state()
 
     return {
         "received": True,

@@ -6,7 +6,9 @@ from zoneinfo import ZoneInfo
 from fastapi import FastAPI
 
 from app.api.v1.api import api_router
+from app.database import trading_store
 from app.persistence import load_state
+from app.schemas import RiskSettings
 
 
 async def keep_alive_ping() -> None:
@@ -35,6 +37,20 @@ async def keep_alive_ping() -> None:
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     load_state()
+    
+    # Initialize default risk settings if not already set
+    if trading_store.get_risk_settings() is None:
+        trading_store.save_risk_settings(
+            RiskSettings(
+                max_position_size=5,
+                daily_loss_limit=5.0,
+                stop_loss_pct=0.05,
+                take_profit_pct=0.1,
+                cooldown_minutes=30,
+                max_open_positions=1,
+                max_consecutive_losses=1,
+            )
+        )
     
     # Start keep-alive task to prevent Render free tier sleep
     keep_alive_task = asyncio.create_task(keep_alive_ping())

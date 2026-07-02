@@ -57,8 +57,8 @@ class AITradingAnalysisService:
             signal = "buy"
             confidence = 0.82
         elif "sell" in notes_text and "breakout" in notes_text:
-            signal = "hold"
-            confidence = 0.72
+            signal = "sell"
+            confidence = 0.82
         elif "sell" in notes_text:
             signal = "sell"
             confidence = 0.74

@@ -6,7 +6,7 @@
       "confidence": 0.82,
       "strategy": "momentum",
       "id": 1,
-      "created_at": "2026-06-29T04:25:38.640897+00:00"
+      "created_at": "2026-07-01T18:20:32.643805+00:00"
     }
   ],
   "alerts": [
@@ -16,7 +16,7 @@
       "price": 190.24,
       "strategy": "breakout",
       "id": 1,
-      "created_at": "2026-06-29T04:25:38.651780+00:00"
+      "created_at": "2026-07-01T18:20:32.656379+00:00"
     },
     {
       "ticker": "AAPL",
@@ -24,7 +24,7 @@
       "price": 190.24,
       "strategy": "breakout",
       "id": 2,
-      "created_at": "2026-06-29T04:25:38.651822+00:00"
+      "created_at": "2026-07-01T18:20:32.656428+00:00"
     },
     {
       "ticker": "TSLA",
@@ -32,7 +32,7 @@
       "price": 250.0,
       "strategy": "breakout",
       "id": 3,
-      "created_at": "2026-06-29T04:25:39.117965+00:00"
+      "created_at": "2026-07-01T18:20:35.282543+00:00"
     },
     {
       "ticker": "QQQ",
@@ -40,7 +40,7 @@
       "price": 480.0,
       "strategy": "breakout",
       "id": 4,
-      "created_at": "2026-06-29T04:25:39.621020+00:00"
+      "created_at": "2026-07-01T18:20:37.586122+00:00"
     },
     {
       "ticker": "MSFT",
@@ -48,43 +48,65 @@
       "price": 421.5,
       "strategy": null,
       "id": 5,
-      "created_at": "2026-06-29T04:25:39.640060+00:00"
-    }
-  ],
-  "orders": [
-    {
-      "symbol": "AAPL",
-      "side": "buy",
-      "quantity": 10,
-      "order_type": "market",
-      "id": 1,
-      "status": "queued",
-      "created_at": "2026-06-29T04:25:38.658060+00:00"
+      "created_at": "2026-07-01T18:20:40.820116+00:00"
     },
     {
-      "symbol": "TSLA",
-      "side": "buy",
-      "quantity": 1,
-      "order_type": "market",
-      "id": 2,
-      "status": "queued",
-      "created_at": "2026-06-29T04:25:39.118024+00:00"
+      "ticker": "QQQ",
+      "action": "buy",
+      "price": 482.4,
+      "strategy": "supertrend",
+      "id": 6,
+      "created_at": "2026-07-01T18:20:42.973975+00:00"
     },
     {
-      "symbol": "MSFT",
-      "side": "buy",
-      "quantity": 100,
-      "order_type": "market",
-      "id": 3,
-      "status": "queued",
-      "created_at": "2026-06-29T04:25:39.670564+00:00"
+      "ticker": "NVDA",
+      "action": "buy",
+      "price": 150.0,
+      "strategy": "breakout",
+      "id": 7,
+      "created_at": "2026-07-01T18:20:43.088878+00:00"
+    },
+    {
+      "ticker": "QQQ",
+      "action": "buy",
+      "price": 100.0,
+      "strategy": "trend",
+      "id": 8,
+      "created_at": "2026-07-01T18:20:43.226578+00:00"
+    },
+    {
+      "ticker": "QQQ",
+      "action": "buy",
+      "price": 100.0,
+      "strategy": "trend",
+      "id": 9,
+      "created_at": "2026-07-01T18:20:43.265098+00:00"
+    },
+    {
+      "ticker": "QQQ",
+      "action": "buy",
+      "price": 740.5,
+      "strategy": "test-alert",
+      "id": 10,
+      "created_at": "2026-07-02T02:34:51.164037+00:00"
+    },
+    {
+      "ticker": "QQQ",
+      "action": "buy",
+      "price": 740.5,
+      "strategy": "test-alert",
+      "id": 11,
+      "created_at": "2026-07-02T02:35:03.579539+00:00"
     }
   ],
+  "orders": [],
   "risk_settings": {
     "max_position_size": 5,
-    "daily_loss_limit": 100.0,
+    "daily_loss_limit": 5.0,
     "stop_loss_pct": 0.05,
     "take_profit_pct": 0.1,
-    "cooldown_minutes": 15
+    "cooldown_minutes": 30,
+    "max_open_positions": 1,
+    "max_consecutive_losses": 1
   }
 }
