@@ -63,7 +63,10 @@ def tradingview_webhook(payload: dict, x_webhook_secret: str | None = Header(def
         else:
             broker_order = alpaca_paper_broker.submit_sell_all(ticker)
         order_payload = {"status": broker_order["status"], "broker": broker_order["broker"], "order": order.model_dump()}
-        save_state()
+        try:
+            save_state()
+        except Exception:
+            pass  # Silently fail if state can't be saved
 
     return {
         "received": True,
