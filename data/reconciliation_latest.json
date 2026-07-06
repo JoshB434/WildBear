@@ -1,11 +1,11 @@
 {
-  "run_at": "2026-07-06T22:46:25.828082+00:00",
+  "run_at": "2026-07-06T22:53:47.198858+00:00",
   "broker": {
     "configured": true,
     "mode": "paper",
     "position_fetch_error": null,
     "order_fetch_error": null,
-    "order_after": "2026-07-05T22:46:25.521834+00:00",
+    "order_after": "2026-07-05T22:53:47.051367+00:00",
     "order_status": "open"
   },
   "summary": {
@@ -17,9 +17,9 @@
     "local_open_positions": 0,
     "broker_open_positions": 0,
     "local_orders": 0,
-    "broker_orders": 1,
+    "broker_orders": 2,
     "position_mismatches": 0,
-    "order_mismatches": 1,
+    "order_mismatches": 2,
     "order_status_updates": 0
   },
   "positions": {
@@ -31,7 +31,15 @@
     "mismatches": [
       {
         "status": "broker_only",
-        "broker_order_id": "7f49af9b-6576-46df-98cb-828a3e67b370",
+        "broker_order_id": "71233771-ffd6-4160-8273-1aadc93d1228",
+        "symbol": "QQQ",
+        "side": "buy",
+        "quantity": 5,
+        "broker_status": "queued"
+      },
+      {
+        "status": "broker_only",
+        "broker_order_id": "70aa7750-9ed4-41bf-8dba-c2af99202a86",
         "symbol": "QQQ",
         "side": "buy",
         "quantity": 5,

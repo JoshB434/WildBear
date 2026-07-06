@@ -31,12 +31,20 @@ def tradingview_webhook(payload: dict, x_webhook_secret: str | None = Header(def
     
     # Validate required fields
     ticker = str(payload.get("ticker") or "").strip().upper()
-    action = str(payload.get("action") or "hold").strip().lower()
+    action_raw = str(payload.get("action") or "hold").strip().lower()
     price = payload.get("price")
     strategy = payload.get("strategy")
     
     if not ticker:
         raise HTTPException(status_code=400, detail="Missing required field: ticker")
+    
+    # Extract action from TradingView message format (e.g., "SuperTrend Buy!" -> "buy")
+    action = "hold"
+    if "buy" in action_raw:
+        action = "buy"
+    elif "sell" in action_raw:
+        action = "sell"
+    
     if action not in {"buy", "sell", "hold"}:
         raise HTTPException(status_code=400, detail="Invalid action. Must be: buy, sell, or hold")
 
