@@ -12,20 +12,20 @@ from app.schemas import RiskSettings
 
 
 async def keep_alive_ping() -> None:
-    """Background task to keep Render app awake during market hours (8:30 AM - 4:30 PM CDT, Monday-Friday)."""
+    """Background task to keep Render app awake during trading hours (7:00 AM - 8:00 PM CDT, Monday-Friday) to catch pre-market, regular, and after-hours alerts."""
     while True:
         await asyncio.sleep(300)  # Check every 5 minutes
         
-        # Check if we're within market hours (8:30 AM - 4:30 PM Central Time, Mon-Fri)
+        # Check if we're within trading hours (7:00 AM - 8:00 PM Central Time, Mon-Fri)
+        # This covers pre-market (7 AM), regular hours (9:30 AM - 4 PM), and after-hours (4-8 PM)
         now_ct = datetime.now(ZoneInfo("America/Chicago"))
         is_weekday = now_ct.weekday() < 5  # Monday=0 to Friday=4
-        is_market_hours = (
-            (now_ct.hour == 8 and now_ct.minute >= 30) or  # 8:30 AM or later
-            (now_ct.hour >= 9 and now_ct.hour < 16) or  # 9 AM - 3:59 PM
-            (now_ct.hour == 16 and now_ct.minute < 30)  # 4:00 PM - 4:29 PM
+        is_trading_hours = (
+            (now_ct.hour == 7) or  # 7:00 AM - 7:59 AM (pre-market start)
+            (now_ct.hour >= 8 and now_ct.hour < 20)  # 8:00 AM - 7:59 PM (covers all trading)
         )
         
-        if is_weekday and is_market_hours:
+        if is_weekday and is_trading_hours:
             try:
                 import httpx
                 async with httpx.AsyncClient() as client:
