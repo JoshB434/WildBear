@@ -1,4 +1,6 @@
 from fastapi import APIRouter, Header, HTTPException
+import json
+from datetime import datetime
 
 from app.config import settings
 from app.database import trading_store
@@ -8,6 +10,24 @@ from app.services.ai_analysis import aitrading_analysis_service
 from app.services.alpaca_client import alpaca_paper_broker
 from app.services.market_data import alpaca_market_data_service
 from app.services.tradingview_alerts import tradingview_alert_service
+
+# Webhook activity log file
+WEBHOOK_LOG_FILE = "data/webhook_activity.log"
+
+def log_webhook_activity(level: str, message: str, details: dict = None):
+    """Log webhook activity for debugging"""
+    timestamp = datetime.utcnow().isoformat()
+    log_entry = {
+        "timestamp": timestamp,
+        "level": level,
+        "message": message,
+        "details": details or {}
+    }
+    try:
+        with open(WEBHOOK_LOG_FILE, "a") as f:
+            f.write(json.dumps(log_entry) + "\n")
+    except Exception:
+        pass  # Silently fail if logging fails
 
 router = APIRouter()
 
@@ -23,10 +43,14 @@ def alpaca_status():
 
 @router.post("/tradingview/webhook")
 def tradingview_webhook(payload: dict, x_webhook_secret: str | None = Header(default=None)):
+    # Log incoming webhook
+    log_webhook_activity("INFO", "Webhook received", {"payload": payload, "has_secret": bool(x_webhook_secret)})
+    
     # Validate webhook secret
     webhook_secret = settings.tradingview_webhook_secret
     if webhook_secret:
         if not x_webhook_secret or x_webhook_secret != webhook_secret:
+            log_webhook_activity("WARN", "Webhook rejected - invalid secret")
             raise HTTPException(status_code=401, detail="Invalid webhook secret")
     
     # Validate required fields
@@ -36,6 +60,7 @@ def tradingview_webhook(payload: dict, x_webhook_secret: str | None = Header(def
     strategy = payload.get("strategy")
     
     if not ticker:
+        log_webhook_activity("WARN", "Webhook rejected - missing ticker")
         raise HTTPException(status_code=400, detail="Missing required field: ticker")
     
     # Extract action from TradingView message format (e.g., "SuperTrend Buy!" -> "buy")
@@ -46,6 +71,7 @@ def tradingview_webhook(payload: dict, x_webhook_secret: str | None = Header(def
         action = "sell"
     
     if action not in {"buy", "sell", "hold"}:
+        log_webhook_activity("WARN", "Webhook rejected - invalid action", {"action": action_raw})
         raise HTTPException(status_code=400, detail="Invalid action. Must be: buy, sell, or hold")
 
     market_data = alpaca_market_data_service.get_stock_snapshot(ticker, timeframe="1Day", limit=5)
@@ -63,6 +89,14 @@ def tradingview_webhook(payload: dict, x_webhook_secret: str | None = Header(def
         notes=f"{action} alert from TradingView via webhook; strategy={strategy or 'n/a'}; {market_summary}",
         market_data=market_data,
     )
+    
+    log_webhook_activity("INFO", "Analysis complete", {
+        "ticker": ticker,
+        "action": action,
+        "signal": analysis.get("signal"),
+        "confidence": analysis.get("confidence"),
+        "threshold": analysis.get("calibrated_threshold")
+    })
 
     order_payload = None
     confidence_threshold = float(analysis.get("calibrated_threshold", 0.7))
@@ -83,10 +117,34 @@ def tradingview_webhook(payload: dict, x_webhook_secret: str | None = Header(def
         actual_quantity = broker_order.get("quantity", 1)
         order = trading_store.create_order(OrderCreate(symbol=ticker, side=side, quantity=actual_quantity))
         order_payload = {"status": broker_order["status"], "broker": broker_order["broker"], "order": order.model_dump()}
+        log_webhook_activity("INFO", "Order created", {
+            "ticker": ticker,
+            "side": side,
+            "quantity": actual_quantity,
+            "status": broker_order.get("status")
+        })
         try:
             save_state()
         except Exception:
             pass  # Silently fail if state can't be saved
+    else:
+        # Log why order was not created
+        reasons = []
+        if not action or action not in {"buy", "sell"}:
+            reasons.append(f"invalid_action: {action}")
+        if analysis.get("signal") not in {"buy", "sell"}:
+            reasons.append(f"invalid_signal: {analysis.get('signal')}")
+        if analysis.get("signal") != action:
+            reasons.append(f"signal_mismatch: signal={analysis.get('signal')} vs action={action}")
+        if float(analysis.get("confidence", 0.0)) < confidence_threshold:
+            reasons.append(f"low_confidence: {analysis.get('confidence')} < {confidence_threshold}")
+        log_webhook_activity("INFO", "Order skipped", {
+            "ticker": ticker,
+            "action": action,
+            "signal": analysis.get("signal"),
+            "confidence": analysis.get("confidence"),
+            "reasons": reasons
+        })
 
     return {
         "received": True,
@@ -96,6 +154,26 @@ def tradingview_webhook(payload: dict, x_webhook_secret: str | None = Header(def
         "analysis": analysis,
         "order": order_payload,
     }
+
+
+@router.get("/tradingview/webhook/logs")
+def get_webhook_logs(limit: int = 50):
+    """Get recent webhook activity logs for debugging"""
+    try:
+        logs = []
+        with open(WEBHOOK_LOG_FILE, "r") as f:
+            all_lines = f.readlines()
+            # Get last 'limit' lines
+            for line in all_lines[-limit:]:
+                try:
+                    logs.append(json.loads(line.strip()))
+                except json.JSONDecodeError:
+                    pass
+        return {"count": len(logs), "logs": logs}
+    except FileNotFoundError:
+        return {"count": 0, "logs": [], "note": "No webhook logs yet"}
+    except Exception as e:
+        return {"error": str(e), "logs": []}
 
 
 @router.get("/ai/status")
