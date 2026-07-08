@@ -1,4 +1,4 @@
-from fastapi import APIRouter, Header, HTTPException
+from fastapi import APIRouter, Header, HTTPException, Request
 import json
 from datetime import datetime
 
@@ -42,9 +42,56 @@ def alpaca_status():
 
 
 @router.post("/tradingview/webhook")
-def tradingview_webhook(payload: dict, x_webhook_secret: str | None = Header(default=None)):
-    # Log incoming webhook
-    log_webhook_activity("INFO", "Webhook received", {"payload": payload, "has_secret": bool(x_webhook_secret)})
+async def tradingview_webhook(request: Request, x_webhook_secret: str | None = Header(default=None)):
+    """Accept both JSON and plain text webhook formats from TradingView"""
+    
+    # Try to parse the request body
+    body_bytes = await request.body()
+    content_type = request.headers.get("content-type", "").lower()
+    
+    # Log raw request
+    log_webhook_activity("INFO", "Webhook received", {
+        "content_type": content_type,
+        "body_length": len(body_bytes),
+        "has_secret": bool(x_webhook_secret)
+    })
+    
+    # Parse payload based on content type
+    payload = {}
+    try:
+        if "application/json" in content_type:
+            payload = json.loads(body_bytes.decode("utf-8"))
+        else:
+            # Parse plain text format: "SuperTrend Buy!" or similar
+            body_text = body_bytes.decode("utf-8").strip()
+            log_webhook_activity("INFO", "Parsing plain text message", {"message": body_text})
+            
+            # Try to extract action and ticker from the message
+            # Expected format: "SuperTrend Buy!" or "SuperTrend Sell!"
+            # We need to infer ticker (default to QQQ if not in message)
+            message_lower = body_text.lower()
+            
+            action = "hold"
+            if "buy" in message_lower:
+                action = "buy"
+            elif "sell" in message_lower:
+                action = "sell"
+            
+            # Try to extract ticker from message or use QQQ as default
+            ticker = "QQQ"
+            for sym in ["BTC", "ETH", "QQQ", "SPY", "TSLA", "AAPL", "MSFT", "NVDA", "AMD"]:
+                if sym.lower() in message_lower:
+                    ticker = sym
+                    break
+            
+            payload = {
+                "ticker": ticker,
+                "action": body_text,  # Store original message as action
+                "strategy": "Supertrend"
+            }
+    except Exception as e:
+        log_webhook_activity("ERROR", "Failed to parse request", {"error": str(e), "content_type": content_type})
+        raise HTTPException(status_code=400, detail=f"Invalid request format: {str(e)}")
     
     # Validate webhook secret
     webhook_secret = settings.tradingview_webhook_secret
@@ -54,7 +101,7 @@ def tradingview_webhook(payload: dict, x_webhook_secret: str | None = Header(def
             raise HTTPException(status_code=401, detail="Invalid webhook secret")
     
     # Validate required fields
-    ticker = str(payload.get("ticker") or "").strip().upper()
+    ticker = str(payload.get("ticker") or "QQQ").strip().upper()
     action_raw = str(payload.get("action") or "hold").strip().lower()
     price = payload.get("price")
     strategy = payload.get("strategy")
