@@ -1,11 +1,11 @@
 {
-  "run_at": "2026-07-08T00:02:40.967319+00:00",
+  "run_at": "2026-07-20T18:30:39.322075+00:00",
   "broker": {
     "configured": true,
     "mode": "paper",
     "position_fetch_error": null,
     "order_fetch_error": null,
-    "order_after": "2026-07-07T00:02:39.401611+00:00",
+    "order_after": "2026-07-19T18:30:34.190770+00:00",
     "order_status": "open"
   },
   "summary": {
@@ -15,16 +15,25 @@
       "QQQ"
     ],
     "local_open_positions": 0,
-    "broker_open_positions": 0,
+    "broker_open_positions": 1,
     "local_orders": 0,
     "broker_orders": 0,
-    "position_mismatches": 0,
+    "position_mismatches": 1,
     "order_mismatches": 0,
     "order_status_updates": 0
   },
   "positions": {
     "matches": [],
-    "mismatches": []
+    "mismatches": [
+      {
+        "symbol": "QQQ",
+        "local_quantity": 0,
+        "broker_quantity": 280,
+        "local_average_entry_price": null,
+        "broker_average_entry_price": 718.875635,
+        "status": "broker_only"
+      }
+    ]
   },
   "orders": {
     "matched": [],

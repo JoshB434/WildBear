@@ -15,17 +15,20 @@ class AlpacaPaperBroker:
         self._paper_balance_fallback = 10000.0
 
     def submit_order(self, symbol: str, side: str, quantity: int) -> Dict[str, Any]:
-        risk_settings = trading_store.get_risk_settings()
-        if risk_settings and quantity > risk_settings.max_position_size:
-            return {
-                "symbol": symbol.upper(),
-                "side": side.lower(),
-                "quantity": quantity,
-                "status": "blocked",
-                "reason": "position size exceeds configured max",
-                "broker": "alpaca-paper",
-                "configured": bool(settings.alpaca_api_key_id and settings.alpaca_api_secret_key),
-            }
+        # Risk check: Only apply position size limit to BUY orders
+        # Sell orders should be allowed to sell any held position
+        if side.lower() == "buy":
+            risk_settings = trading_store.get_risk_settings()
+            if risk_settings and quantity > risk_settings.max_position_size:
+                return {
+                    "symbol": symbol.upper(),
+                    "side": side.lower(),
+                    "quantity": quantity,
+                    "status": "blocked",
+                    "reason": "position size exceeds configured max",
+                    "broker": "alpaca-paper",
+                    "configured": bool(settings.alpaca_api_key_id and settings.alpaca_api_secret_key),
+                }
 
         payload = {
             "symbol": symbol.upper(),
