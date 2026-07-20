@@ -95,6 +95,41 @@ class AlpacaPaperBroker:
         except requests.RequestException:
             return None
 
+    def _count_consecutive_buy_orders(self, symbol: str) -> int:
+        """
+        Count consecutive buy orders for a symbol since the last sell.
+        Returns the number of buy orders that should determine the allocation tier.
+        """
+        try:
+            orders = trading_store.list_orders()
+            symbol_orders = [o for o in orders if o.symbol.upper() == symbol.upper()]
+            
+            if not symbol_orders:
+                return 0
+            
+            # Sort by creation time (newest first)
+            symbol_orders.sort(key=lambda o: o.created_at, reverse=True)
+            
+            # Find the most recent SELL order
+            last_sell_idx = None
+            for i, order in enumerate(symbol_orders):
+                if order.side.lower() == "sell":
+                    last_sell_idx = i
+                    break
+            
+            # Count BUY orders after the last SELL
+            buy_count = 0
+            for i, order in enumerate(symbol_orders):
+                if last_sell_idx is not None and i >= last_sell_idx:
+                    # Skip orders at or before the last sell
+                    continue
+                if order.side.lower() == "buy":
+                    buy_count += 1
+            
+            return buy_count
+        except Exception:
+            return 0
+
     def get_account_balance(self) -> float:
         headers = {
             "APCA-API-KEY-ID": settings.alpaca_api_key_id or "",
@@ -181,10 +216,10 @@ class AlpacaPaperBroker:
 
     def submit_buy_with_balance_limit(self, symbol: str, account_balance: float | None = None, buy_pct: float = 0.15) -> Dict[str, Any]:
         """
-        Dynamic position sizing based on number of active positions:
-        - 1st buy signal (no positions): 25% of account
-        - 2nd buy signal (1 position): 25% of account
-        - 3rd+ buy signals (2+ positions): 5-10% of account
+        Dynamic position sizing based on consecutive buy orders since last sell:
+        - 1st buy signal (no prior buys or after sell): 25% of account
+        - 2nd buy signal (1 prior buy): 25% of account
+        - 3rd+ buy signals (2+ prior buys): 7.5% of account
         - Max total allocation: 75% of account
         
         Args:
@@ -208,7 +243,7 @@ class AlpacaPaperBroker:
             account_response.raise_for_status()
             account = account_response.json()
             
-            # Get positions
+            # Get positions for current portfolio investment tracking
             positions_response = self._session.get(
                 f"{settings.alpaca_base_url}/positions",
                 headers=headers,
@@ -228,7 +263,9 @@ class AlpacaPaperBroker:
                 total_position_value += abs(position_value)
             
             current_invested_pct = (total_position_value / total_account_value) * 100 if total_account_value > 0 else 0.0
-            num_positions = len(positions)
+            
+            # Count consecutive buy orders for this symbol since last sell (for tier determination)
+            num_consecutive_buys = self._count_consecutive_buy_orders(symbol)
             
             # Get risk settings for allocation percentages
             risk_settings = trading_store.get_risk_settings()
@@ -244,11 +281,11 @@ class AlpacaPaperBroker:
                 subsequent_buy_pct = 7.5
                 max_allocation = 75.0
             
-            # Determine allocation percentage based on tier
-            if num_positions == 0:
+            # Determine allocation percentage based on consecutive buy count
+            if num_consecutive_buys == 0:
                 # First buy: configured percentage of account
                 allocation_pct = first_buy_pct
-            elif num_positions == 1:
+            elif num_consecutive_buys == 1:
                 # Second buy: configured percentage of account (additional)
                 allocation_pct = second_buy_pct
             else:

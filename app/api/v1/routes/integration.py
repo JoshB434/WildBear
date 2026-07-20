@@ -158,20 +158,14 @@ async def tradingview_webhook(request: Request, x_webhook_secret: str | None = H
             allocation_info = {}
             if side == "buy":
                 try:
-                    import requests as req
-                    headers = {
-                        "APCA-API-KEY-ID": settings.alpaca_api_key_id or "",
-                        "APCA-API-SECRET-KEY": settings.alpaca_api_secret_key or "",
-                    }
-                    positions_resp = req.get(f"{settings.alpaca_base_url}/positions", headers=headers, timeout=5)
-                    positions = positions_resp.json() if positions_resp.ok and isinstance(positions_resp.json(), list) else []
-                    num_positions = len(positions)
+                    # Count consecutive buy orders since last sell to determine tier
+                    num_consecutive_buys = alpaca_paper_broker._count_consecutive_buy_orders(ticker)
                     
                     risk_settings = trading_store.get_risk_settings()
                     if risk_settings:
-                        if num_positions == 0:
+                        if num_consecutive_buys == 0:
                             allocation_info = {"tier": "1st_buy", "allocation_pct": risk_settings.first_buy_allocation_pct}
-                        elif num_positions == 1:
+                        elif num_consecutive_buys == 1:
                             allocation_info = {"tier": "2nd_buy", "allocation_pct": risk_settings.second_buy_allocation_pct}
                         else:
                             allocation_info = {"tier": "subsequent", "allocation_pct": risk_settings.subsequent_buy_allocation_pct}
