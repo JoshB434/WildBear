@@ -44,21 +44,25 @@ def alpaca_status():
 @router.post("/tradingview/webhook")
 async def tradingview_webhook(request: Request, x_webhook_secret: str | None = Header(default=None)):
     """Accept both JSON and plain text webhook formats from TradingView"""
+@router.post("/tradingview/webhook")
+async def tradingview_webhook(request: Request, x_webhook_secret: str | None = Header(default=None)):
+    """Accept both JSON and plain text webhook formats from TradingView"""
     
-    # Try to parse the request body
-    body_bytes = await request.body()
-    content_type = request.headers.get("content-type", "").lower()
-    
-    # Log raw request
-    log_webhook_activity("INFO", "Webhook received", {
-        "content_type": content_type,
-        "body_length": len(body_bytes),
-        "has_secret": bool(x_webhook_secret)
-    })
-    
-    # Parse payload based on content type
-    payload = {}
+    ticker = "unknown"
     try:
+        # Try to parse the request body
+        body_bytes = await request.body()
+        content_type = request.headers.get("content-type", "").lower()
+        
+        # Log raw request
+        log_webhook_activity("INFO", "Webhook received", {
+            "content_type": content_type,
+            "body_length": len(body_bytes),
+            "has_secret": bool(x_webhook_secret)
+        })
+    
+        # Parse payload based on content type
+        payload = {}
         if "application/json" in content_type:
             payload = json.loads(body_bytes.decode("utf-8"))
         else:
@@ -89,150 +93,161 @@ async def tradingview_webhook(request: Request, x_webhook_secret: str | None = H
                 "action": body_text,  # Store original message as action
                 "strategy": "Supertrend"
             }
-    except Exception as e:
-        log_webhook_activity("ERROR", "Failed to parse request", {"error": str(e), "content_type": content_type})
-        raise HTTPException(status_code=400, detail=f"Invalid request format: {str(e)}")
-    
-    # Validate webhook secret
-    webhook_secret = settings.tradingview_webhook_secret
-    if webhook_secret:
-        if not x_webhook_secret or x_webhook_secret != webhook_secret:
-            log_webhook_activity("WARN", "Webhook rejected - invalid secret")
-            raise HTTPException(status_code=401, detail="Invalid webhook secret")
-    
-    # Validate required fields
-    ticker = str(payload.get("ticker") or "QQQ").strip().upper()
-    action_raw = str(payload.get("action") or "hold").strip().lower()
-    price = payload.get("price")
-    strategy = payload.get("strategy")
-    
-    if not ticker:
-        log_webhook_activity("WARN", "Webhook rejected - missing ticker")
-        raise HTTPException(status_code=400, detail="Missing required field: ticker")
-    
-    # Extract action from TradingView message format (e.g., "SuperTrend Buy!" -> "buy")
-    action = "hold"
-    if "buy" in action_raw:
-        action = "buy"
-    elif "sell" in action_raw:
-        action = "sell"
-    
-    if action not in {"buy", "sell", "hold"}:
-        log_webhook_activity("WARN", "Webhook rejected - invalid action", {"action": action_raw})
-        raise HTTPException(status_code=400, detail="Invalid action. Must be: buy, sell, or hold")
+        
+        # Validate webhook secret
+        webhook_secret = settings.tradingview_webhook_secret
+        if webhook_secret:
+            if not x_webhook_secret or x_webhook_secret != webhook_secret:
+                log_webhook_activity("WARN", "Webhook rejected - invalid secret")
+                raise HTTPException(status_code=401, detail="Invalid webhook secret")
+        
+        # Validate required fields
+        ticker = str(payload.get("ticker") or "QQQ").strip().upper()
+        action_raw = str(payload.get("action") or "hold").strip().lower()
+        price = payload.get("price")
+        strategy = payload.get("strategy")
+        
+        if not ticker:
+            log_webhook_activity("WARN", "Webhook rejected - missing ticker")
+            raise HTTPException(status_code=400, detail="Missing required field: ticker")
+        
+        # Extract action from TradingView message format (e.g., "SuperTrend Buy!" -> "buy")
+        action = "hold"
+        if "buy" in action_raw:
+            action = "buy"
+        elif "sell" in action_raw:
+            action = "sell"
+        
+        if action not in {"buy", "sell", "hold"}:
+            log_webhook_activity("WARN", "Webhook rejected - invalid action", {"action": action_raw})
+            raise HTTPException(status_code=400, detail="Invalid action. Must be: buy, sell, or hold")
 
-    market_data = alpaca_market_data_service.get_stock_snapshot(ticker, timeframe="1Day", limit=5)
-    market_summary = alpaca_market_data_service.build_analysis_summary(market_data)
+        market_data = alpaca_market_data_service.get_stock_snapshot(ticker, timeframe="1Day", limit=5)
+        market_summary = alpaca_market_data_service.build_analysis_summary(market_data)
 
-    alert = tradingview_alert_service.receive_alert(
-        ticker=ticker,
-        action=action,
-        price=float(price) if price is not None else None,
-        strategy=strategy,
-    )
-    analysis = aitrading_analysis_service.analyze(
-        symbol=ticker,
-        timeframe="1D",
-        notes=f"{action} alert from TradingView via webhook; strategy={strategy or 'n/a'}; {market_summary}",
-        market_data=market_data,
-    )
-    
-    log_webhook_activity("INFO", "Analysis complete", {
-        "ticker": ticker,
-        "action": action,
-        "signal": analysis.get("signal"),
-        "confidence": analysis.get("confidence"),
-        "threshold": analysis.get("calibrated_threshold")
-    })
-
-    order_payload = None
-    confidence_threshold = float(analysis.get("calibrated_threshold", 0.7))
-    if (
-        ticker
-        and action in {"buy", "sell"}
-        and analysis.get("signal") in {"buy", "sell"}
-        and analysis["signal"] == action
-        and float(analysis.get("confidence", 0.0)) >= confidence_threshold
-    ):
-        side = analysis["signal"]
+        alert = tradingview_alert_service.receive_alert(
+            ticker=ticker,
+            action=action,
+            price=float(price) if price is not None else None,
+            strategy=strategy,
+        )
+        analysis = aitrading_analysis_service.analyze(
+            symbol=ticker,
+            timeframe="1D",
+            notes=f"{action} alert from TradingView via webhook; strategy={strategy or 'n/a'}; {market_summary}",
+            market_data=market_data,
+        )
         
-        # For BUY orders, determine allocation tier for logging
-        allocation_info = {}
-        if side == "buy":
-            try:
-                import requests as req
-                headers = {
-                    "APCA-API-KEY-ID": settings.alpaca_api_key_id or "",
-                    "APCA-API-SECRET-KEY": settings.alpaca_api_secret_key or "",
-                }
-                positions_resp = req.get(f"{settings.alpaca_base_url}/positions", headers=headers, timeout=5)
-                positions = positions_resp.json() if positions_resp.ok and isinstance(positions_resp.json(), list) else []
-                num_positions = len(positions)
-                
-                risk_settings = trading_store.get_risk_settings()
-                if risk_settings:
-                    if num_positions == 0:
-                        allocation_info = {"tier": "1st_buy", "allocation_pct": risk_settings.first_buy_allocation_pct}
-                    elif num_positions == 1:
-                        allocation_info = {"tier": "2nd_buy", "allocation_pct": risk_settings.second_buy_allocation_pct}
-                    else:
-                        allocation_info = {"tier": "subsequent", "allocation_pct": risk_settings.subsequent_buy_allocation_pct}
-            except Exception:
-                allocation_info = {"tier": "unknown"}
-        
-        # Execute broker order first to get actual quantity
-        if side == "buy":
-            broker_order = alpaca_paper_broker.submit_buy_with_balance_limit(ticker, account_balance=None, buy_pct=0.15)
-        else:
-            broker_order = alpaca_paper_broker.submit_sell_all(ticker)
-        
-        # Record order with actual quantity from broker
-        actual_quantity = broker_order.get("quantity", 1)
-        order = trading_store.create_order(OrderCreate(symbol=ticker, side=side, quantity=actual_quantity))
-        order_payload = {"status": broker_order["status"], "broker": broker_order["broker"], "order": order.model_dump()}
-        
-        log_details = {
-            "ticker": ticker,
-            "side": side,
-            "quantity": actual_quantity,
-            "status": broker_order.get("status")
-        }
-        # Add allocation info if it's a buy order
-        if allocation_info:
-            log_details.update(allocation_info)
-        
-        log_webhook_activity("INFO", "Order created", log_details)
-        try:
-            save_state()
-        except Exception:
-            pass  # Silently fail if state can't be saved
-    else:
-        # Log why order was not created
-        reasons = []
-        if not action or action not in {"buy", "sell"}:
-            reasons.append(f"invalid_action: {action}")
-        if analysis.get("signal") not in {"buy", "sell"}:
-            reasons.append(f"invalid_signal: {analysis.get('signal')}")
-        if analysis.get("signal") != action:
-            reasons.append(f"signal_mismatch: signal={analysis.get('signal')} vs action={action}")
-        if float(analysis.get("confidence", 0.0)) < confidence_threshold:
-            reasons.append(f"low_confidence: {analysis.get('confidence')} < {confidence_threshold}")
-        log_webhook_activity("INFO", "Order skipped", {
+        log_webhook_activity("INFO", "Analysis complete", {
             "ticker": ticker,
             "action": action,
             "signal": analysis.get("signal"),
             "confidence": analysis.get("confidence"),
-            "reasons": reasons
+            "threshold": analysis.get("calibrated_threshold")
         })
 
-    return {
-        "received": True,
-        "payload": payload,
-        "alert": alert,
-        "market_data": market_data,
-        "analysis": analysis,
-        "order": order_payload,
-    }
+        order_payload = None
+        confidence_threshold = float(analysis.get("calibrated_threshold", 0.7))
+        if (
+            ticker
+            and action in {"buy", "sell"}
+            and analysis.get("signal") in {"buy", "sell"}
+            and analysis["signal"] == action
+            and float(analysis.get("confidence", 0.0)) >= confidence_threshold
+        ):
+            side = analysis["signal"]
+            
+            # For BUY orders, determine allocation tier for logging
+            allocation_info = {}
+            if side == "buy":
+                try:
+                    import requests as req
+                    headers = {
+                        "APCA-API-KEY-ID": settings.alpaca_api_key_id or "",
+                        "APCA-API-SECRET-KEY": settings.alpaca_api_secret_key or "",
+                    }
+                    positions_resp = req.get(f"{settings.alpaca_base_url}/positions", headers=headers, timeout=5)
+                    positions = positions_resp.json() if positions_resp.ok and isinstance(positions_resp.json(), list) else []
+                    num_positions = len(positions)
+                    
+                    risk_settings = trading_store.get_risk_settings()
+                    if risk_settings:
+                        if num_positions == 0:
+                            allocation_info = {"tier": "1st_buy", "allocation_pct": risk_settings.first_buy_allocation_pct}
+                        elif num_positions == 1:
+                            allocation_info = {"tier": "2nd_buy", "allocation_pct": risk_settings.second_buy_allocation_pct}
+                        else:
+                            allocation_info = {"tier": "subsequent", "allocation_pct": risk_settings.subsequent_buy_allocation_pct}
+                except Exception:
+                    allocation_info = {"tier": "unknown"}
+            
+            # Execute broker order first to get actual quantity
+            if side == "buy":
+                broker_order = alpaca_paper_broker.submit_buy_with_balance_limit(ticker, account_balance=None, buy_pct=0.15)
+            else:
+                broker_order = alpaca_paper_broker.submit_sell_all(ticker)
+            
+            # Record order with actual quantity from broker
+            actual_quantity = broker_order.get("quantity", 1) if broker_order else 1
+            order = trading_store.create_order(OrderCreate(symbol=ticker, side=side, quantity=actual_quantity))
+            order_payload = {
+                "status": broker_order.get("status") if broker_order else "unknown",
+                "broker": broker_order.get("broker") if broker_order else "alpaca-paper",
+                "order": order.model_dump()
+            }
+            
+            log_details = {
+                "ticker": ticker,
+                "side": side,
+                "quantity": actual_quantity,
+                "status": broker_order.get("status") if broker_order else "unknown"
+            }
+            # Add allocation info if it's a buy order
+            if allocation_info:
+                log_details.update(allocation_info)
+            
+            log_webhook_activity("INFO", "Order created", log_details)
+            try:
+                save_state()
+            except Exception:
+                pass  # Silently fail if state can't be saved
+        else:
+            # Log why order was not created
+            reasons = []
+            if not action or action not in {"buy", "sell"}:
+                reasons.append(f"invalid_action: {action}")
+            if analysis.get("signal") not in {"buy", "sell"}:
+                reasons.append(f"invalid_signal: {analysis.get('signal')}")
+            if analysis.get("signal") != action:
+                reasons.append(f"signal_mismatch: signal={analysis.get('signal')} vs action={action}")
+            if float(analysis.get("confidence", 0.0)) < confidence_threshold:
+                reasons.append(f"low_confidence: {analysis.get('confidence')} < {confidence_threshold}")
+            log_webhook_activity("INFO", "Order skipped", {
+                "ticker": ticker,
+                "action": action,
+                "signal": analysis.get("signal"),
+                "confidence": analysis.get("confidence"),
+                "reasons": reasons
+            })
+
+        return {
+            "received": True,
+            "payload": payload,
+            "alert": alert,
+            "market_data": market_data,
+            "analysis": analysis,
+            "order": order_payload,
+        }
+    
+    except HTTPException:
+        # Re-raise HTTPExceptions (validation errors, etc.)
+        raise
+    except Exception as e:
+        log_webhook_activity("ERROR", f"Webhook processing failed: {str(e)}", {
+            "error_type": type(e).__name__,
+            "ticker": ticker
+        })
+        raise HTTPException(status_code=500, detail=f"Webhook processing failed: {str(e)}")
 
 
 @router.get("/tradingview/webhook/logs")
