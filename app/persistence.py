@@ -4,6 +4,7 @@ from pathlib import Path
 from typing import Any
 
 from app.database import trading_store
+from app.schemas import RiskSettings
 
 DATA_FILE = Path(__file__).resolve().parent.parent / "data" / "trading_state.json"
 
@@ -59,6 +60,7 @@ def load_state() -> None:
             continue
     if payload.get("risk_settings"):
         try:
-            trading_store.save_risk_settings(type("RiskSettings", (), payload["risk_settings"])())
+            # Use RiskSettings Pydantic model to load with defaults for new fields
+            trading_store.save_risk_settings(RiskSettings(**payload["risk_settings"]))
         except Exception:
             pass
