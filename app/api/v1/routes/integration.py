@@ -44,9 +44,6 @@ def alpaca_status():
 @router.post("/tradingview/webhook")
 async def tradingview_webhook(request: Request, x_webhook_secret: str | None = Header(default=None)):
     """Accept both JSON and plain text webhook formats from TradingView"""
-@router.post("/tradingview/webhook")
-async def tradingview_webhook(request: Request, x_webhook_secret: str | None = Header(default=None)):
-    """Accept both JSON and plain text webhook formats from TradingView"""
     
     ticker = "unknown"
     try:
