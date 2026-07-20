@@ -117,31 +117,196 @@ class AlpacaPaperBroker:
         except requests.RequestException:
             return self._paper_balance_fallback
 
+    def _get_account_value(self) -> float:
+        """Get total account equity (cash + positions)"""
+        headers = {
+            "APCA-API-KEY-ID": settings.alpaca_api_key_id or "",
+            "APCA-API-SECRET-KEY": settings.alpaca_api_secret_key or "",
+            "Content-Type": "application/json",
+        }
+        try:
+            response = self._session.get(
+                f"{settings.alpaca_base_url}/account",
+                headers=headers,
+                timeout=15,
+            )
+            response.raise_for_status()
+            account = response.json()
+            portfolio_value = float(account.get("portfolio_value", 0))
+            if portfolio_value > 0:
+                return portfolio_value
+            # Fallback to cash only if portfolio_value not available
+            cash = float(account.get("cash", 0))
+            return cash if cash > 0 else self._paper_balance_fallback
+        except requests.RequestException:
+            return self._paper_balance_fallback
+
+    def _get_invested_percentage(self) -> float:
+        """Get percentage of account currently invested in positions"""
+        headers = {
+            "APCA-API-KEY-ID": settings.alpaca_api_key_id or "",
+            "APCA-API-SECRET-KEY": settings.alpaca_api_secret_key or "",
+            "Content-Type": "application/json",
+        }
+        try:
+            account_response = self._session.get(
+                f"{settings.alpaca_base_url}/account",
+                headers=headers,
+                timeout=15,
+            )
+            account_response.raise_for_status()
+            account = account_response.json()
+            
+            portfolio_value = float(account.get("portfolio_value", 0))
+            if portfolio_value <= 0:
+                return 0.0
+            
+            positions_response = self._session.get(
+                f"{settings.alpaca_base_url}/positions",
+                headers=headers,
+                timeout=15,
+            )
+            positions_response.raise_for_status()
+            positions = positions_response.json() if isinstance(positions_response.json(), list) else []
+            
+            total_position_value = 0.0
+            for position in positions:
+                position_value = float(position.get("market_value", 0))
+                total_position_value += abs(position_value)
+            
+            invested_pct = (total_position_value / portfolio_value) * 100
+            return min(invested_pct, 100.0)
+        except requests.RequestException:
+            return 0.0
+
     def submit_buy_with_balance_limit(self, symbol: str, account_balance: float | None = None, buy_pct: float = 0.15) -> Dict[str, Any]:
-        balance = account_balance if account_balance is not None else self.get_account_balance()
-        if balance <= 0:
-            balance = self._paper_balance_fallback
+        """
+        Dynamic position sizing based on number of active positions:
+        - 1st buy signal (no positions): 25% of account
+        - 2nd buy signal (1 position): 25% of account
+        - 3rd+ buy signals (2+ positions): 5-10% of account
+        - Max total allocation: 75% of account
+        
+        Args:
+            symbol: Stock ticker to buy
+            account_balance: Optional override account balance
+            buy_pct: Fallback percentage if dynamic sizing unavailable
+        """
+        headers = {
+            "APCA-API-KEY-ID": settings.alpaca_api_key_id or "",
+            "APCA-API-SECRET-KEY": settings.alpaca_api_secret_key or "",
+            "Content-Type": "application/json",
+        }
+        
+        try:
+            # Get account info
+            account_response = self._session.get(
+                f"{settings.alpaca_base_url}/account",
+                headers=headers,
+                timeout=15,
+            )
+            account_response.raise_for_status()
+            account = account_response.json()
+            
+            # Get positions
+            positions_response = self._session.get(
+                f"{settings.alpaca_base_url}/positions",
+                headers=headers,
+                timeout=15,
+            )
+            positions_response.raise_for_status()
+            positions = positions_response.json() if isinstance(positions_response.json(), list) else []
+            
+            total_account_value = float(account.get("portfolio_value", 0))
+            if total_account_value <= 0:
+                total_account_value = self._paper_balance_fallback
+            
+            # Calculate current investment percentage
+            total_position_value = 0.0
+            for position in positions:
+                position_value = float(position.get("market_value", 0))
+                total_position_value += abs(position_value)
+            
+            current_invested_pct = (total_position_value / total_account_value) * 100 if total_account_value > 0 else 0.0
+            num_positions = len(positions)
+            
+            # Get risk settings for allocation percentages
+            risk_settings = trading_store.get_risk_settings()
+            if risk_settings:
+                first_buy_pct = risk_settings.first_buy_allocation_pct
+                second_buy_pct = risk_settings.second_buy_allocation_pct
+                subsequent_buy_pct = risk_settings.subsequent_buy_allocation_pct
+                max_allocation = risk_settings.max_total_allocation_pct
+            else:
+                # Defaults
+                first_buy_pct = 25.0
+                second_buy_pct = 25.0
+                subsequent_buy_pct = 7.5
+                max_allocation = 75.0
+            
+            # Determine allocation percentage based on tier
+            if num_positions == 0:
+                # First buy: configured percentage of account
+                allocation_pct = first_buy_pct
+            elif num_positions == 1:
+                # Second buy: configured percentage of account (additional)
+                allocation_pct = second_buy_pct
+            else:
+                # Subsequent buys: configured percentage
+                allocation_pct = subsequent_buy_pct
+            
+            # Check if adding this allocation would exceed max
+            projected_invested = current_invested_pct + allocation_pct
+            if projected_invested > max_allocation:
+                # Scale back to not exceed max
+                remaining_allocation = max_allocation - current_invested_pct
+                if remaining_allocation <= 0:
+                    return {
+                        "symbol": symbol.upper(),
+                        "side": "buy",
+                        "quantity": 0,
+                        "status": "blocked",
+                        "reason": f"account already at {current_invested_pct:.1f}% allocation (max {max_allocation}%)",
+                        "broker": "alpaca-paper",
+                        "configured": bool(settings.alpaca_api_key_id and settings.alpaca_api_secret_key),
+                    }
+                allocation_pct = remaining_allocation
+            
+            # Calculate dollar amount and quantity
+            max_dollar_amount = total_account_value * (allocation_pct / 100.0)
+            quantity = max(1, int(max_dollar_amount // 100))
+            
+            # Apply per-share max_position_size limit if configured (as fallback safety)
+            if risk_settings is not None and risk_settings.max_position_size > 0:
+                quantity = min(quantity, risk_settings.max_position_size)
+            
+            return self.submit_order(symbol, "buy", quantity)
+        
+        except requests.RequestException:
+            # Fallback to simpler calculation
+            balance = account_balance if account_balance is not None else self.get_account_balance()
+            if balance <= 0:
+                balance = self._paper_balance_fallback
+            
+            max_dollar_amount = balance * max(0.0, min(1.0, buy_pct))
+            if max_dollar_amount <= 0:
+                return {
+                    "symbol": symbol.upper(),
+                    "side": "buy",
+                    "quantity": 0,
+                    "status": "blocked",
+                    "reason": "buy percentage is invalid",
+                    "broker": "alpaca-paper",
+                    "configured": bool(settings.alpaca_api_key_id and settings.alpaca_api_secret_key),
+                }
 
-        max_dollar_amount = balance * max(0.0, min(1.0, buy_pct))
-        if max_dollar_amount <= 0:
-            return {
-                "symbol": symbol.upper(),
-                "side": "buy",
-                "quantity": 0,
-                "status": "blocked",
-                "reason": "buy percentage is invalid",
-                "broker": "alpaca-paper",
-                "configured": bool(settings.alpaca_api_key_id and settings.alpaca_api_secret_key),
-            }
-
-        quantity = max(1, int(max_dollar_amount // 100))
-        risk_settings = trading_store.get_risk_settings()
-        if risk_settings is not None:
-            quantity = min(quantity, risk_settings.max_position_size)
-        else:
-            # Default risk limit if not configured
-            quantity = min(quantity, 5)
-        return self.submit_order(symbol, "buy", quantity)
+            quantity = max(1, int(max_dollar_amount // 100))
+            risk_settings = trading_store.get_risk_settings()
+            if risk_settings is not None:
+                quantity = min(quantity, risk_settings.max_position_size)
+            else:
+                quantity = min(quantity, 5)
+            return self.submit_order(symbol, "buy", quantity)
 
     def submit_sell_all(self, symbol: str) -> Dict[str, Any]:
         """Sell entire position for a symbol. Fetches current position size from broker."""

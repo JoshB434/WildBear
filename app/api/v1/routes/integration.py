@@ -155,21 +155,53 @@ async def tradingview_webhook(request: Request, x_webhook_secret: str | None = H
         and float(analysis.get("confidence", 0.0)) >= confidence_threshold
     ):
         side = analysis["signal"]
+        
+        # For BUY orders, determine allocation tier for logging
+        allocation_info = {}
+        if side == "buy":
+            try:
+                import requests as req
+                headers = {
+                    "APCA-API-KEY-ID": settings.alpaca_api_key_id or "",
+                    "APCA-API-SECRET-KEY": settings.alpaca_api_secret_key or "",
+                }
+                positions_resp = req.get(f"{settings.alpaca_base_url}/positions", headers=headers, timeout=5)
+                positions = positions_resp.json() if positions_resp.ok and isinstance(positions_resp.json(), list) else []
+                num_positions = len(positions)
+                
+                risk_settings = trading_store.get_risk_settings()
+                if risk_settings:
+                    if num_positions == 0:
+                        allocation_info = {"tier": "1st_buy", "allocation_pct": risk_settings.first_buy_allocation_pct}
+                    elif num_positions == 1:
+                        allocation_info = {"tier": "2nd_buy", "allocation_pct": risk_settings.second_buy_allocation_pct}
+                    else:
+                        allocation_info = {"tier": "subsequent", "allocation_pct": risk_settings.subsequent_buy_allocation_pct}
+            except Exception:
+                allocation_info = {"tier": "unknown"}
+        
         # Execute broker order first to get actual quantity
         if side == "buy":
             broker_order = alpaca_paper_broker.submit_buy_with_balance_limit(ticker, account_balance=None, buy_pct=0.15)
         else:
             broker_order = alpaca_paper_broker.submit_sell_all(ticker)
+        
         # Record order with actual quantity from broker
         actual_quantity = broker_order.get("quantity", 1)
         order = trading_store.create_order(OrderCreate(symbol=ticker, side=side, quantity=actual_quantity))
         order_payload = {"status": broker_order["status"], "broker": broker_order["broker"], "order": order.model_dump()}
-        log_webhook_activity("INFO", "Order created", {
+        
+        log_details = {
             "ticker": ticker,
             "side": side,
             "quantity": actual_quantity,
             "status": broker_order.get("status")
-        })
+        }
+        # Add allocation info if it's a buy order
+        if allocation_info:
+            log_details.update(allocation_info)
+        
+        log_webhook_activity("INFO", "Order created", log_details)
         try:
             save_state()
         except Exception:
@@ -235,3 +267,67 @@ def ai_status():
 def save_risk_settings(settings_in: RiskSettings):
     trading_store.save_risk_settings(settings_in)
     return {"saved": True, "settings": settings_in.model_dump()}
+
+
+@router.get("/allocation-settings")
+def get_allocation_settings():
+    """Get current position allocation tier settings"""
+    settings = trading_store.get_risk_settings()
+    if not settings:
+        return {
+            "error": "Risk settings not configured",
+            "note": "Using defaults: 1st=25%, 2nd=25%, 3rd+=7.5%, max=75%"
+        }
+    return {
+        "first_buy_allocation_pct": settings.first_buy_allocation_pct,
+        "second_buy_allocation_pct": settings.second_buy_allocation_pct,
+        "subsequent_buy_allocation_pct": settings.subsequent_buy_allocation_pct,
+        "max_total_allocation_pct": settings.max_total_allocation_pct,
+    }
+
+
+@router.post("/allocation-settings")
+def update_allocation_settings(
+    first_buy: float = 25.0,
+    second_buy: float = 25.0,
+    subsequent_buy: float = 7.5,
+    max_total: float = 75.0,
+):
+    """Update position allocation tier settings
+    
+    Args:
+        first_buy: % of account for 1st buy (1-100)
+        second_buy: % of account for 2nd buy (1-100)
+        subsequent_buy: % of account for 3rd+ buys (1-50)
+        max_total: Max % of account in total positions (1-100)
+    """
+    settings = trading_store.get_risk_settings()
+    if not settings:
+        return {"error": "Risk settings not configured"}
+    
+    # Validate inputs
+    if not (1.0 <= first_buy <= 100.0):
+        return {"error": "first_buy must be 1-100"}
+    if not (1.0 <= second_buy <= 100.0):
+        return {"error": "second_buy must be 1-100"}
+    if not (1.0 <= subsequent_buy <= 50.0):
+        return {"error": "subsequent_buy must be 1-50"}
+    if not (1.0 <= max_total <= 100.0):
+        return {"error": "max_total must be 1-100"}
+    
+    # Update settings
+    settings.first_buy_allocation_pct = first_buy
+    settings.second_buy_allocation_pct = second_buy
+    settings.subsequent_buy_allocation_pct = subsequent_buy
+    settings.max_total_allocation_pct = max_total
+    
+    trading_store.save_risk_settings(settings)
+    return {
+        "updated": True,
+        "allocation_tiers": {
+            "1st_buy": f"{first_buy}% of account",
+            "2nd_buy": f"{second_buy}% of account",
+            "3rd+_buys": f"{subsequent_buy}% of account",
+            "max_total": f"{max_total}% of account"
+        }
+    }

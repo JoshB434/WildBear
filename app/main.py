@@ -42,13 +42,18 @@ async def lifespan(app: FastAPI):
     if trading_store.get_risk_settings() is None:
         trading_store.save_risk_settings(
             RiskSettings(
-                max_position_size=5,
+                max_position_size=50,  # Fallback max shares per trade
                 daily_loss_limit=5.0,
                 stop_loss_pct=0.05,
                 take_profit_pct=0.1,
                 cooldown_minutes=30,
-                max_open_positions=1,
-                max_consecutive_losses=1,
+                max_open_positions=10,
+                max_consecutive_losses=5,
+                # Dynamic allocation tiers (percentage-based)
+                first_buy_allocation_pct=25.0,      # 1st buy: 25% of account
+                second_buy_allocation_pct=25.0,     # 2nd buy: 25% of account
+                subsequent_buy_allocation_pct=7.5,  # 3rd+: 7.5% of account
+                max_total_allocation_pct=75.0,      # Max 75% total invested
             )
         )
     

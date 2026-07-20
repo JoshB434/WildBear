@@ -90,8 +90,16 @@ class AIAnalysisResult(BaseModel):
 
 
 class RiskSettings(BaseModel):
-    max_position_size: int = Field(gt=0)
-    daily_loss_limit: float = Field(gt=0)
-    stop_loss_pct: float = Field(ge=0.0)
-    take_profit_pct: float = Field(ge=0.0)
-    cooldown_minutes: int = Field(ge=0)
+    max_position_size: int = Field(gt=0, description="Max shares per trade (legacy, used as fallback)")
+    daily_loss_limit: float = Field(gt=0, description="Max daily loss percentage")
+    stop_loss_pct: float = Field(ge=0.0, description="Stop loss percentage")
+    take_profit_pct: float = Field(ge=0.0, description="Take profit percentage")
+    cooldown_minutes: int = Field(ge=0, description="Minutes between trades")
+    max_open_positions: int = Field(ge=1, default=10, description="Max simultaneous open positions")
+    max_consecutive_losses: int = Field(ge=1, default=5, description="Max consecutive losses before pause")
+    
+    # Dynamic position sizing (percentage-based allocation)
+    first_buy_allocation_pct: float = Field(default=25.0, ge=1.0, le=100.0, description="% of account for 1st buy")
+    second_buy_allocation_pct: float = Field(default=25.0, ge=1.0, le=100.0, description="% of account for 2nd buy")
+    subsequent_buy_allocation_pct: float = Field(default=7.5, ge=1.0, le=50.0, description="% of account for 3rd+ buys")
+    max_total_allocation_pct: float = Field(default=75.0, ge=1.0, le=100.0, description="Max % of account in total positions")
