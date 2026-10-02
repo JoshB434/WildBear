@@ -100,6 +100,7 @@ class InMemoryTradingStore:
             side=order_in.side.lower(),
             quantity=order_in.quantity,
             order_type=order_in.order_type,
+            price=order_in.price,
         )
         self._orders[self._next_order_id] = order
         self._next_order_id += 1
@@ -113,6 +114,17 @@ class InMemoryTradingStore:
 
     def list_orders(self) -> list[Order]:
         return list(self._orders.values())
+
+    def get_last_buy_price(self, symbol: str) -> Optional[float]:
+        """Return the price recorded on the most recent buy order for a symbol, if any."""
+        buy_orders = [
+            o for o in self._orders.values()
+            if o.symbol.upper() == symbol.upper() and o.side.lower() == "buy" and o.price is not None
+        ]
+        if not buy_orders:
+            return None
+        latest = max(buy_orders, key=lambda o: o.created_at)
+        return latest.price
 
     def save_risk_settings(self, settings_in: RiskSettings) -> RiskSettings:
         self._risk_settings = settings_in

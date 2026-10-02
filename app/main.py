@@ -57,6 +57,14 @@ async def lifespan(app: FastAPI):
             )
         )
     
+    # Align QQQ strategy state with actual Alpaca positions/orders after a restart.
+    try:
+        from app.api.v1.routes.integration import get_qqq_workflow
+
+        await asyncio.to_thread(get_qqq_workflow().reconcile)
+    except Exception:
+        pass  # reconcile locks out trading itself when broker state is unverifiable
+
     # Start keep-alive task to prevent Render free tier sleep
     keep_alive_task = asyncio.create_task(keep_alive_ping())
     

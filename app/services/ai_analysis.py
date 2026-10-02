@@ -89,6 +89,45 @@ class AITradingAnalysisService:
             "model": "local-rule-based",
         }
 
+    def evaluate_entry_candidate(self, context: Dict[str, Any]) -> Dict[str, Any]:
+        """Approve or reject a validated entry candidate. Fails closed; cannot alter stop, target or size."""
+        if self._client is None:
+            return {"approve": False, "confidence": 0.0, "rationale": "ai-unavailable", "model": "none"}
+        model = os.getenv("OPENAI_MODEL", "gpt-4.1-mini")
+        try:
+            response = self._client.chat.completions.create(
+                model=model,
+                messages=[
+                    {
+                        "role": "system",
+                        "content": (
+                            "You review long-only QQQ pullback entry candidates for strategy qqq_pullback_v1. "
+                            "Decide only whether the setup is a sound candidate given the signal, market context, "
+                            "account and position state. Stop, target and position size are fixed by deterministic "
+                            "risk code and cannot be changed by you. Be conservative: reject when unsure. "
+                            'Respond with JSON only: {"approve": true|false, "confidence": 0-1, "rationale": "..."}.'
+                        ),
+                    },
+                    {"role": "user", "content": json.dumps(context, default=str, sort_keys=True)},
+                ],
+            )
+            text = (response.choices[0].message.content or "").strip()
+            if text.startswith("```"):
+                text = text.strip("`").strip()
+                if text.lower().startswith("json"):
+                    text = text[4:].strip()
+            parsed = self._parse_json_response(text)
+            if not isinstance(parsed, dict) or not isinstance(parsed.get("approve"), bool):
+                return {"approve": False, "confidence": 0.0, "rationale": "unparseable-ai-response", "model": model}
+            return {
+                "approve": parsed["approve"],
+                "confidence": max(0.0, min(1.0, float(parsed.get("confidence", 0.0)))),
+                "rationale": str(parsed.get("rationale", ""))[:1000],
+                "model": f"openai:{model}",
+            }
+        except Exception as exc:
+            return {"approve": False, "confidence": 0.0, "rationale": f"ai-error: {type(exc).__name__}", "model": model}
+
     def _format_market_data(self, market_data: Dict[str, Any] | None) -> str:
         if not market_data:
             return "No live market data available."

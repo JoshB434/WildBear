@@ -62,6 +62,7 @@ class OrderBase(BaseModel):
     side: str
     quantity: int = Field(gt=0)
     order_type: str = "market"
+    price: Optional[float] = Field(default=None, description="Reference/fill price at time of order")
 
 
 class OrderCreate(OrderBase):
@@ -103,3 +104,12 @@ class RiskSettings(BaseModel):
     second_buy_allocation_pct: float = Field(default=25.0, ge=1.0, le=100.0, description="% of account for 2nd buy")
     subsequent_buy_allocation_pct: float = Field(default=7.5, ge=1.0, le=50.0, description="% of account for 3rd+ buys")
     max_total_allocation_pct: float = Field(default=75.0, ge=1.0, le=100.0, description="Max % of account in total positions")
+
+    # AI signal confidence controls
+    min_ai_confidence_buy: float = Field(default=0.72, ge=0.0, le=1.0, description="Minimum AI confidence required for buy orders")
+    min_ai_confidence_sell: float = Field(default=0.78, ge=0.0, le=1.0, description="Minimum AI confidence required for sell orders")
+
+    # Sell-side profit protection controls
+    block_loss_sells: bool = Field(default=True, description="Block sell orders below cost basis unless stop-loss override is triggered")
+    min_profit_pct_for_sell: float = Field(default=0.0, ge=0.0, le=1.0, description="Minimum required gain over entry price before allowing a sell")
+    require_sell_above_last_buy: bool = Field(default=True, description="Block sell orders unless price exceeds the most recent buy order price for the symbol")
