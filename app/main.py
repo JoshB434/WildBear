@@ -34,6 +34,19 @@ async def keep_alive_ping() -> None:
                 pass  # Silently fail if pinging doesn't work
 
 
+async def qqq_position_monitor() -> None:
+    """Periodically verify the QQQ position and its protective orders against Alpaca."""
+    from app.api.v1.routes.integration import get_qqq_workflow
+    from app.config import settings
+
+    while True:
+        await asyncio.sleep(max(15, settings.qqq_monitor_interval_seconds))
+        try:
+            await asyncio.to_thread(get_qqq_workflow().monitor)
+        except Exception:
+            pass  # next pass retries; reconcile locks out trading when state is unverifiable
+
+
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     load_state()
@@ -67,15 +80,18 @@ async def lifespan(app: FastAPI):
 
     # Start keep-alive task to prevent Render free tier sleep
     keep_alive_task = asyncio.create_task(keep_alive_ping())
+    monitor_task = asyncio.create_task(qqq_position_monitor())
     
     try:
         yield
     finally:
         keep_alive_task.cancel()
-        try:
-            await keep_alive_task
-        except asyncio.CancelledError:
-            pass
+        monitor_task.cancel()
+        for task in (keep_alive_task, monitor_task):
+            try:
+                await task
+            except asyncio.CancelledError:
+                pass
 
 
 app = FastAPI(

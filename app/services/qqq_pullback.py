@@ -1,16 +1,18 @@
-"""QQQ pullback (qqq_pullback_v1) webhook workflow: validate -> risk gates -> AI -> Alpaca bracket -> verified protection."""
+"""QQQ pullback (qqq_pullback_v2) webhook workflow: validate -> risk gates -> AI -> Alpaca bracket -> verified protection."""
 import logging
 import math
 import re
 import time
-from datetime import datetime
+from datetime import datetime, time as time_of_day, timedelta
 from typing import Any, Callable
+from zoneinfo import ZoneInfo
 
 from app.services.alpaca_client import BrokerAmbiguous, BrokerError, BrokerNotFound, BrokerRejected
 from app.services.qqq_signals import STRATEGY_ID, EntryCandidate, ExitSignal, Signal
 from app.services.qqq_state import QQQStateStore
 
 logger = logging.getLogger("qqq_pullback")
+ET = ZoneInfo("America/New_York")
 
 TERMINAL_ORDER_STATUSES = {"filled", "canceled", "expired", "rejected", "done_for_day", "replaced", "stopped"}
 ACTIVE_ORDER_STATUSES = {"new", "accepted", "pending_new", "accepted_for_bidding", "held", "partially_filled", "pending_replace"}
@@ -114,6 +116,9 @@ class QQQPullbackWorkflow:
         stale = self._stale_reason(s.bar_time)
         if stale:
             return self._reject(stale)
+        outside = self._window_reason(s.bar_time)
+        if outside:
+            return self._reject(outside)
         if not cfg.qqq_trading_enabled:
             return self._reject("trading-disabled")
         lockout = self.store.get_lockout()
@@ -151,6 +156,17 @@ class QQQPullbackWorkflow:
         open_orders = self.broker.list_orders_strict(s.symbol, "open")
         if any(str(o.get("status", "")).lower() in ACTIVE_ORDER_STATUSES for o in open_orders):
             return self._reject("open-order-exists")
+
+        # The broker is flat; a stale local 'open' row means a protective order already closed it.
+        stale_row = self.store.get_active_position(s.symbol, STRATEGY_ID)
+        if stale_row and stale_row["status"] == "open":
+            # Re-read the broker: the earlier snapshot may predate a concurrent entry's fill.
+            fresh_position = self.broker.get_position_strict(s.symbol)
+            fresh_orders = self.broker.list_orders_strict(s.symbol, "open")
+            if fresh_position is None and not any(
+                str(o.get("status", "")).lower() in ACTIVE_ORDER_STATUSES for o in fresh_orders
+            ):
+                self._settle_closed_from_history(stale_row["id"], s.symbol, "closed-by-protective-order")
 
         client_order_id = f"qqq-entry-{s.event_id}"[:128]
         pos_id, reason = self.store.reserve_position(
@@ -219,10 +235,7 @@ class QQQPullbackWorkflow:
         }
         decision = self.ai.evaluate_entry_candidate(context)
         self.store.audit(s.event_id, "ai_decision", decision)
-        min_conf = cfg.qqq_min_ai_confidence
-        if risk_settings is not None:
-            min_conf = max(min_conf, float(risk_settings.min_ai_confidence_buy))
-        if decision.get("approve") is not True or _f(decision.get("confidence")) < min_conf:
+        if str(decision.get("decision", "")).upper() != "APPROVE":
             return release("ai-rejected", ai=decision)
 
         # Re-check lockout: another request may have tripped it while the AI was running.
@@ -347,6 +360,8 @@ class QQQPullbackWorkflow:
                     return {"verified": True, "rebuilt": True, "covered_qty": qty}
                 self.sleep(self.poll_interval)
             return {"verified": False, "reason": "protection-not-visible-after-rebuild"}
+        except BrokerAmbiguous as exc:
+            return {"verified": False, "transient": True, "reason": f"broker-unavailable:{exc}"}
         except BrokerError as exc:
             return {"verified": False, "reason": f"broker-error:{type(exc).__name__}"}
 
@@ -508,9 +523,13 @@ class QQQPullbackWorkflow:
                     report["actions"].append("position-closed-while-offline")
                 else:
                     protection = self._ensure_protection(row["id"], event_id, symbol, row["stop_price"], row["target_price"])
-                    if not protection["verified"]:
+                    if protection.get("transient"):
+                        report["actions"].append("protection-check-unavailable")  # retried on the next monitor pass
+                    elif not protection["verified"]:
                         self._failsafe(row["id"], event_id, symbol, f"recovery-protection-unverified:{protection.get('reason')}")
-                    report["actions"].append(f"protection-checked:{protection['verified']}")
+                        report["actions"].append("protection-checked:False")
+                    else:
+                        report["actions"].append("protection-checked:True")
         except BrokerAmbiguous as exc:
             self.store.set_lockout(f"recovery-broker-unverifiable: {exc}")
             self._log("CRITICAL", "Recovery could not verify broker state; trading locked out", error=str(exc))
@@ -518,6 +537,25 @@ class QQQPullbackWorkflow:
         return report
 
     # ------------------------------------------------------------------ helpers
+    def monitor(self) -> dict[str, Any] | None:
+        """Periodic pass: only touches the broker when a strategy position or entry is active."""
+        if self.store.get_active_position("QQQ", STRATEGY_ID) is None:
+            return None
+        return self.reconcile()
+
+    def _window_reason(self, bar_time_ms: int) -> str | None:
+        """Entries are only allowed inside the configured America/New_York window (signal time and receipt time)."""
+        cfg = self.cfg
+        start = time_of_day.fromisoformat(cfg.qqq_window_start)
+        end = time_of_day.fromisoformat(cfg.qqq_window_end)
+        signal_et = datetime.fromtimestamp(bar_time_ms / 1000.0, ET)
+        now_et = datetime.fromtimestamp(self.now(), ET)
+        if signal_et.weekday() >= 5 or not start <= signal_et.time() <= end:
+            return "signal-outside-trading-window"
+        latest = datetime.combine(now_et.date(), end, tzinfo=ET) + timedelta(minutes=cfg.qqq_window_grace_minutes)
+        if now_et.weekday() >= 5 or now_et.time() < start or now_et > latest:
+            return "outside-trading-window"
+        return None
     def _attempts(self, timeout: float) -> int:
         return int(timeout / self.poll_interval) if self.poll_interval > 0 else int(timeout)
 

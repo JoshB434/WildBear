@@ -90,9 +90,13 @@ class AITradingAnalysisService:
         }
 
     def evaluate_entry_candidate(self, context: Dict[str, Any]) -> Dict[str, Any]:
-        """Approve or reject a validated entry candidate. Fails closed; cannot alter stop, target or size."""
+        """Return {"decision": "APPROVE"|"REJECT", "reason": str}. Fails closed; cannot alter stop, target or size."""
+
+        def reject(reason: str) -> Dict[str, Any]:
+            return {"decision": "REJECT", "reason": reason}
+
         if self._client is None:
-            return {"approve": False, "confidence": 0.0, "rationale": "ai-unavailable", "model": "none"}
+            return reject("ai-unavailable")
         model = os.getenv("OPENAI_MODEL", "gpt-4.1-mini")
         try:
             response = self._client.chat.completions.create(
@@ -101,11 +105,14 @@ class AITradingAnalysisService:
                     {
                         "role": "system",
                         "content": (
-                            "You review long-only QQQ pullback entry candidates for strategy qqq_pullback_v1. "
-                            "Decide only whether the setup is a sound candidate given the signal, market context, "
-                            "account and position state. Stop, target and position size are fixed by deterministic "
-                            "risk code and cannot be changed by you. Be conservative: reject when unsure. "
-                            'Respond with JSON only: {"approve": true|false, "confidence": 0-1, "rationale": "..."}.'
+                            "You review ENTRY CANDIDATES from the 'QQQ AI Webhook Signals - Non Repainting' "
+                            "TradingView indicator (strategy qqq_pullback_v2: long-only QQQ pullbacks on a 5-minute "
+                            "chart with a confirmed 15-minute trend filter). A candidate is NOT an instruction to "
+                            "trade. Using only the signal, market context, account and position state supplied, "
+                            "decide whether it is a sound long entry for this strategy. Stop, target and quantity "
+                            "are fixed by deterministic risk code and you cannot change them. Reject when evidence "
+                            "is weak, missing or inconsistent. "
+                            'Respond with JSON only: {"decision": "APPROVE" or "REJECT", "reason": "..."}.'
                         ),
                     },
                     {"role": "user", "content": json.dumps(context, default=str, sort_keys=True)},
@@ -117,16 +124,12 @@ class AITradingAnalysisService:
                 if text.lower().startswith("json"):
                     text = text[4:].strip()
             parsed = self._parse_json_response(text)
-            if not isinstance(parsed, dict) or not isinstance(parsed.get("approve"), bool):
-                return {"approve": False, "confidence": 0.0, "rationale": "unparseable-ai-response", "model": model}
-            return {
-                "approve": parsed["approve"],
-                "confidence": max(0.0, min(1.0, float(parsed.get("confidence", 0.0)))),
-                "rationale": str(parsed.get("rationale", ""))[:1000],
-                "model": f"openai:{model}",
-            }
+            decision = str(parsed.get("decision", "")).strip().upper() if isinstance(parsed, dict) else ""
+            if decision not in {"APPROVE", "REJECT"}:
+                return reject("unparseable-ai-response")
+            return {"decision": decision, "reason": str(parsed.get("reason", ""))[:1000], "model": f"openai:{model}"}
         except Exception as exc:
-            return {"approve": False, "confidence": 0.0, "rationale": f"ai-error: {type(exc).__name__}", "model": model}
+            return reject(f"ai-error: {type(exc).__name__}")
 
     def _format_market_data(self, market_data: Dict[str, Any] | None) -> str:
         if not market_data:

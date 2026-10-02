@@ -32,10 +32,7 @@ class Settings:
     tradingview_webhook_secret: str | None = os.getenv("TRADINGVIEW_WEBHOOK_SECRET")
     openai_api_key: str | None = os.getenv("OPENAI_API_KEY")
 
-    # Legacy SuperTrend webhook path; disabled so only QQQ AI Webhook Signals are processed.
-    legacy_webhook_enabled: bool = _env_bool("LEGACY_SUPERTREND_ENABLED", False)
-
-    # QQQ pullback strategy (qqq_pullback_v1). Entries stay disabled until explicitly enabled.
+    # QQQ pullback strategy (qqq_pullback_v2). Entries stay disabled until explicitly enabled.
     qqq_trading_enabled: bool = _env_bool("QQQ_TRADING_ENABLED", False)
     qqq_risk_pct: float = _env_float("QQQ_RISK_PCT", 0.005)  # fraction of equity risked per trade
     qqq_max_position_value: float = _env_float("QQQ_MAX_POSITION_VALUE", 20000.0)
@@ -44,7 +41,10 @@ class Settings:
     qqq_max_alert_age_seconds: int = _env_int("QQQ_MAX_ALERT_AGE_SECONDS", 600)
     qqq_max_entry_slippage_pct: float = _env_float("QQQ_MAX_ENTRY_SLIPPAGE_PCT", 0.3)
     qqq_no_entry_minutes_before_close: int = _env_int("QQQ_NO_ENTRY_MINUTES_BEFORE_CLOSE", 15)
-    qqq_min_ai_confidence: float = _env_float("QQQ_MIN_AI_CONFIDENCE", 0.72)
+    qqq_window_start: str = os.getenv("QQQ_WINDOW_START", "10:00")  # America/New_York
+    qqq_window_end: str = os.getenv("QQQ_WINDOW_END", "15:00")  # America/New_York
+    qqq_window_grace_minutes: int = _env_int("QQQ_WINDOW_GRACE_MINUTES", 5)  # delivery delay allowed past the end
+    qqq_monitor_interval_seconds: int = _env_int("QQQ_MONITOR_INTERVAL_SECONDS", 60)
     qqq_fill_timeout_seconds: float = _env_float("QQQ_FILL_TIMEOUT_SECONDS", 20.0)
     qqq_state_db_path: str = os.getenv("QQQ_STATE_DB_PATH", "data/qqq_strategy.db")
 

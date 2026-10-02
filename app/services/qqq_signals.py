@@ -4,7 +4,7 @@ from typing import Literal, Union
 
 from pydantic import BaseModel, ConfigDict, Field, ValidationError, model_validator
 
-STRATEGY_ID = "qqq_pullback_v1"
+STRATEGY_ID = "qqq_pullback_v2"
 SUPPORTED_SYMBOL = "QQQ"
 SUPPORTED_TIMEFRAME = "5"
 
@@ -19,7 +19,7 @@ class _BaseSignal(BaseModel):
     timeframe: Literal["5"]
     bar_time: int = Field(gt=0, description="Bar timestamp in epoch milliseconds")
     price: float = Field(gt=0)
-    strategy: Literal["qqq_pullback_v1"]
+    strategy: Literal["qqq_pullback_v2"]
     # Optional shared secret for senders that cannot set HTTP headers; never stored or logged.
     passphrase: str | None = Field(default=None, exclude=True, repr=False)
 

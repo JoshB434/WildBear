@@ -15,7 +15,7 @@ from app.services.qqq_pullback import QQQPullbackWorkflow, compute_quantity
 from app.services.qqq_signals import UnsupportedEvent, parse_signal
 from app.services.qqq_state import QQQStateStore
 
-NOW = 1_790_964_600.0  # fixed "current" epoch seconds for deterministic staleness checks
+NOW = 1_790_953_200.0  # Fri 2026-10-02 11:00 America/New_York, inside the 10:00-15:00 window
 
 
 class FakeBroker:
@@ -143,12 +143,12 @@ class FakeBroker:
 
 
 class FakeAI:
-    def __init__(self, approve=True, confidence=0.9):
-        self.approve, self.confidence, self.calls = approve, confidence, 0
+    def __init__(self, decision="APPROVE", raw=None):
+        self.decision, self.raw, self.calls = decision, raw, 0
 
     def evaluate_entry_candidate(self, context):
         self.calls += 1
-        return {"approve": self.approve, "confidence": self.confidence, "rationale": "test", "model": "fake"}
+        return self.raw if self.raw is not None else {"decision": self.decision, "reason": "test", "model": "fake"}
 
 
 class FakeMarketData:
@@ -160,7 +160,8 @@ def make_cfg(**overrides):
     base = dict(
         qqq_trading_enabled=True, qqq_risk_pct=0.005, qqq_max_position_value=1_000_000.0,
         qqq_max_trades_per_day=3, qqq_daily_loss_limit_pct=1.0, qqq_max_alert_age_seconds=600,
-        qqq_max_entry_slippage_pct=0.3, qqq_no_entry_minutes_before_close=15, qqq_min_ai_confidence=0.72,
+        qqq_max_entry_slippage_pct=0.3, qqq_no_entry_minutes_before_close=15,
+        qqq_window_start="10:00", qqq_window_end="15:00", qqq_window_grace_minutes=5,
         qqq_fill_timeout_seconds=3.0,
     )
     base.update(overrides)
@@ -171,7 +172,7 @@ def entry_payload(event_id="QQQ_ENTRY_1", bar_time=None, **overrides):
     payload = {
         "event": "ENTRY_CANDIDATE", "event_id": event_id, "symbol": "QQQ", "side": "buy", "timeframe": "5",
         "bar_time": int((NOW - 300) * 1000) if bar_time is None else bar_time, "price": 600.0, "stop_price": 598.5,
-        "target_price": 602.25, "atr": 1.0, "strategy": "qqq_pullback_v1",
+        "target_price": 602.25, "atr": 1.0, "strategy": "qqq_pullback_v2",
     }
     payload.update(overrides)
     return payload
@@ -180,7 +181,7 @@ def entry_payload(event_id="QQQ_ENTRY_1", bar_time=None, **overrides):
 def exit_payload(event_id="QQQ_EXIT_1", **overrides):
     payload = {
         "event": "EXIT_SIGNAL", "event_id": event_id, "symbol": "QQQ", "side": "close_long", "timeframe": "5",
-        "bar_time": int((NOW - 100) * 1000), "price": 599.25, "strategy": "qqq_pullback_v1",
+        "bar_time": int((NOW - 100) * 1000), "price": 599.25, "strategy": "qqq_pullback_v2",
     }
     payload.update(overrides)
     return payload
@@ -212,6 +213,7 @@ def test_valid_entry_and_exit_payloads_parse():
     [
         entry_payload(symbol="SPY"),
         entry_payload(strategy="supertrend"),
+        entry_payload(strategy="qqq_pullback_v1"),
         entry_payload(timeframe="15"),
         entry_payload(side="sell"),
         entry_payload(price=-1),
@@ -255,7 +257,7 @@ def test_workflow_uses_sized_quantity_and_actual_fills(tmp_path):
     assert result["filled_qty"] == 322  # risk budget 500 / (600.05 ask - 598.5 stop)
     assert broker.calls[0] == ("bracket_buy", 322, 598.5, 602.25)
     assert result["actual_risk"] == round((600.05 - 598.5) * 322, 2)
-    row = store.get_active_position("QQQ", "qqq_pullback_v1")
+    row = store.get_active_position("QQQ", "qqq_pullback_v2")
     assert row["status"] == "open" and row["entry_price"] == 600.05 and row["qty"] == 322
 
 
@@ -274,16 +276,91 @@ def test_stale_alert_rejected(tmp_path):
 
 
 def test_ai_rejection_blocks_order(tmp_path):
-    ai = FakeAI(approve=False)
+    ai = FakeAI(decision="REJECT")
     workflow, broker, store = build(tmp_path, ai=ai)
     result = run(workflow, entry_payload())
     assert result["reason"] == "ai-rejected" and ai.calls == 1 and not broker.calls
-    assert store.get_active_position("QQQ", "qqq_pullback_v1") is None
+    assert store.get_active_position("QQQ", "qqq_pullback_v2") is None
 
 
-def test_ai_low_confidence_blocks_order(tmp_path):
-    workflow, broker, _ = build(tmp_path, ai=FakeAI(approve=True, confidence=0.5))
+@pytest.mark.parametrize("raw", [{"approve": True}, {"decision": "MAYBE"}, {"decision": True}, {}])
+def test_malformed_ai_response_blocks_order(tmp_path, raw):
+    workflow, broker, _ = build(tmp_path, ai=FakeAI(raw=raw))
     assert run(workflow, entry_payload())["reason"] == "ai-rejected" and not broker.calls
+
+
+def test_ai_cannot_bypass_deterministic_checks(tmp_path):
+    workflow, broker, _ = build(tmp_path, ai=FakeAI(decision="APPROVE"))
+    broker.position_qty = 10
+    assert run(workflow, entry_payload())["reason"] == "existing-broker-position" and not broker.calls
+
+
+def test_signal_after_window_end_rejected(tmp_path):
+    workflow, broker, _ = build(tmp_path)
+    workflow.now = lambda: NOW + 4 * 3600 + 600  # 15:10 ET
+    result = run(workflow, entry_payload("W2", bar_time=int((NOW + 4 * 3600 + 500) * 1000)))
+    assert result["reason"] == "signal-outside-trading-window" and not broker.calls
+
+
+def test_signal_outside_window_but_stale_free_is_rejected(tmp_path):
+    workflow, broker, _ = build(tmp_path)
+    workflow.now = lambda: NOW - 5400 + 100  # 09:31 ET
+    result = run(workflow, entry_payload("W3", bar_time=int((NOW - 5400) * 1000)))
+    assert result["reason"] == "signal-outside-trading-window" and not broker.calls
+
+
+def test_signal_in_window_but_delivered_too_late_rejected(tmp_path):
+    workflow, broker, _ = build(tmp_path)
+    workflow.now = lambda: NOW + 4 * 3600 + 400  # 15:06:40 ET, past 15:00 + 5 min grace
+    result = run(workflow, entry_payload("W4", bar_time=int((NOW + 4 * 3600 - 60) * 1000)))
+    assert result["reason"] == "outside-trading-window" and not broker.calls
+
+
+def test_exit_allowed_outside_trading_window(tmp_path):
+    workflow, broker, _ = build(tmp_path)
+    run(workflow, entry_payload())
+    workflow.now = lambda: NOW + 5 * 3600  # 16:00 ET
+    result = run(workflow, exit_payload("XW", bar_time=int((NOW + 5 * 3600 - 60) * 1000)))
+    assert result["status"] == "completed" and broker.position_qty == 0
+
+
+def test_new_entry_allowed_after_protective_stop_closed_prior_trade(tmp_path):
+    workflow, broker, store = build(tmp_path)
+    run(workflow, entry_payload("E1"))
+    broker.position_qty = 0  # stop filled at Alpaca
+    for order in broker.orders.values():
+        if order["side"] == "sell" and order["status"] in broker.ACTIVE:
+            order["status"] = "canceled"
+    broker._add(side="sell", type="stop", qty="322", status="filled", filled_qty="322", filled_avg_price="598.5")
+    result = run(workflow, entry_payload("E2"))
+    assert result["status"] == "completed"
+    assert store.get_position(1)["status"] == "closed"
+
+
+def test_monitor_is_noop_when_flat_and_settles_closed_positions(tmp_path):
+    workflow, broker, store = build(tmp_path)
+    assert workflow.monitor() is None and not broker.calls
+    run(workflow, entry_payload())
+    broker.position_qty = 0
+    for order in broker.orders.values():
+        if order["side"] == "sell" and order["status"] in broker.ACTIVE:
+            order["status"] = "canceled"
+    broker._add(side="sell", type="limit", qty="322", status="filled", filled_qty="322", filled_avg_price="602.25")
+    assert workflow.monitor()["actions"] == ["position-closed-while-offline"]
+    assert store.get_position(1)["realized_pl"] == round((602.25 - 600.05) * 322, 2)
+
+
+def test_transient_broker_error_during_monitor_does_not_flatten(tmp_path):
+    workflow, broker, store = build(tmp_path)
+    run(workflow, entry_payload())
+
+    def flaky(*_a, **_k):
+        raise BrokerAmbiguous("timeout")
+
+    broker.list_orders_strict = flaky
+    report = workflow.monitor()
+    assert report["actions"] == ["protection-check-unavailable"]
+    assert broker.position_qty == 322 and not store.get_lockout()["locked"]
 
 
 def test_ai_approval_places_order_with_protection(tmp_path):
@@ -348,7 +425,7 @@ def test_broker_rejection_of_entry(tmp_path):
     broker.mode = "reject"
     result = run(workflow, entry_payload())
     assert result["reason"] == "broker-rejected-entry"
-    assert store.get_active_position("QQQ", "qqq_pullback_v1") is None
+    assert store.get_active_position("QQQ", "qqq_pullback_v2") is None
     assert not store.get_lockout()["locked"]
 
 
@@ -359,7 +436,7 @@ def test_partial_fill_protects_actual_filled_quantity(tmp_path):
     assert result["status"] == "completed" and result["partial_fill"] is True
     assert result["filled_qty"] == 161
     assert ("oco", 161, 598.5, 602.25) in broker.calls
-    assert store.get_active_position("QQQ", "qqq_pullback_v1")["qty"] == 161
+    assert store.get_active_position("QQQ", "qqq_pullback_v2")["qty"] == 161
 
 
 def test_protection_failure_triggers_failsafe_and_lockout(tmp_path):
@@ -387,7 +464,7 @@ def test_timeout_with_order_not_placed_is_not_retried(tmp_path):
     result = run(workflow, entry_payload())
     assert result["reason"] == "submission-failed-order-not-placed"
     assert len(broker.calls) == 1
-    assert store.get_active_position("QQQ", "qqq_pullback_v1") is None
+    assert store.get_active_position("QQQ", "qqq_pullback_v2") is None
 
 
 def test_timeout_with_unverifiable_state_locks_out(tmp_path):
@@ -396,7 +473,7 @@ def test_timeout_with_unverifiable_state_locks_out(tmp_path):
     result = run(workflow, entry_payload())
     assert result["status"] == "failed"
     assert store.get_lockout()["locked"]
-    assert store.get_active_position("QQQ", "qqq_pullback_v1")["status"] == "ambiguous"
+    assert store.get_active_position("QQQ", "qqq_pullback_v2")["status"] == "ambiguous"
 
 
 def test_concurrent_duplicate_and_distinct_events_place_one_order(tmp_path):
@@ -438,7 +515,7 @@ def test_exit_closes_long_without_going_short(tmp_path):
     result = run(workflow, exit_payload())
     assert result["status"] == "completed" and result["filled_qty"] == 322
     assert broker.position_qty == 0
-    assert store.get_active_position("QQQ", "qqq_pullback_v1") is None
+    assert store.get_active_position("QQQ", "qqq_pullback_v2") is None
     assert not any(o["status"] in broker.ACTIVE for o in broker.orders.values())
     closed = store.get_position(1)
     assert closed["status"] == "closed" and closed["realized_pl"] == round((599.25 - 600.05) * 322, 2)
@@ -465,7 +542,7 @@ def test_exit_still_allowed_during_lockout(tmp_path):
 def test_restart_recovery_rebuilds_protection_for_filled_entry(tmp_path):
     workflow, broker, store = build(tmp_path)
     store.claim_event("E_RECOVER", "ENTRY_CANDIDATE")
-    pos_id, _ = store.reserve_position("QQQ", "qqq_pullback_v1", "E_RECOVER", "qqq-entry-E_RECOVER", "2026-10-02", 3)
+    pos_id, _ = store.reserve_position("QQQ", "qqq_pullback_v2", "E_RECOVER", "qqq-entry-E_RECOVER", "2026-10-02", 3)
     store.update_position(pos_id, qty=100, stop_price=598.5, target_price=602.25, order_submitted=1)
     broker._add(side="buy", type="market", qty="100", client_order_id="qqq-entry-E_RECOVER",
                 status="filled", filled_qty="100", filled_avg_price="600.05")
@@ -475,7 +552,7 @@ def test_restart_recovery_rebuilds_protection_for_filled_entry(tmp_path):
     report = fresh.reconcile()
     assert report["actions"] == ["entry-recovered:completed"]
     assert ("oco", 100, 598.5, 602.25) in broker.calls
-    assert store.get_active_position("QQQ", "qqq_pullback_v1")["status"] == "open"
+    assert store.get_active_position("QQQ", "qqq_pullback_v2")["status"] == "open"
 
 
 def test_restart_recovery_closes_row_when_position_is_gone(tmp_path):
@@ -488,7 +565,7 @@ def test_restart_recovery_closes_row_when_position_is_gone(tmp_path):
     broker._add(side="sell", type="stop", qty="333", status="filled", filled_qty="333", filled_avg_price="598.5")
     report = workflow.reconcile()
     assert report["actions"] == ["position-closed-while-offline"]
-    assert store.get_active_position("QQQ", "qqq_pullback_v1") is None
+    assert store.get_active_position("QQQ", "qqq_pullback_v2") is None
 
 
 def test_restart_recovery_flags_orphan_broker_position(tmp_path):
@@ -500,7 +577,6 @@ def test_restart_recovery_flags_orphan_broker_position(tmp_path):
 # ---------------------------------------------------------------- HTTP layer
 @pytest.fixture
 def api(tmp_path, monkeypatch):
-    monkeypatch.setattr(settings, "legacy_webhook_enabled", False)
     monkeypatch.setattr(settings, "tradingview_webhook_secret", None)
     workflow, broker, store = build(tmp_path)
     monkeypatch.setattr(integration_module, "_qqq_workflow", workflow)
@@ -510,13 +586,11 @@ def api(tmp_path, monkeypatch):
 URL = "/api/v1/integration/tradingview/webhook"
 
 
-def test_api_valid_entry_and_exit(api, monkeypatch):
+def test_api_valid_entry_and_exit(api):
     client, workflow, broker = api
-    monkeypatch.setattr(workflow, "now", lambda: time.time())
-    fresh = int(time.time() * 1000) - 60_000
-    entry = client.post(URL, json=entry_payload("API_E1", bar_time=fresh))
+    entry = client.post(URL, json=entry_payload("API_E1"))
     assert entry.status_code == 200 and entry.json()["status"] == "completed"
-    exit_ = client.post(URL, json=exit_payload("API_X1", bar_time=fresh + 1000))
+    exit_ = client.post(URL, json=exit_payload("API_X1"))
     assert exit_.status_code == 200 and exit_.json()["status"] == "completed"
     assert broker.position_qty == 0
 
@@ -558,6 +632,6 @@ def test_api_webhook_secret_via_header_or_passphrase(api, monkeypatch):
     monkeypatch.setattr(settings, "tradingview_webhook_secret", "s3cret")
     assert client.post(URL, json=entry_payload()).status_code == 401
     assert client.post(URL, json=entry_payload(passphrase="wrong")).status_code == 401
-    ok = client.post(URL, json=entry_payload("API_E2", bar_time=int(time.time() * 1000)), headers={"x-webhook-secret": "s3cret"})
+    ok = client.post(URL, json=entry_payload("API_E2"), headers={"x-webhook-secret": "s3cret"})
     assert ok.status_code == 200
     assert "s3cret" not in ok.text
